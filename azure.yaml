@@ -1,10 +1,10 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
 
-name: starter-dotnet8-flex-func
+name: azure-ddns
 metadata:
-  template: functions-quickstart-dotnet-azd@1.1.0
+  template: azure-ddns-multitenant@1.0.0
 services:
-  api:
+  ddns:
     project: ./http/
     language: dotnet
     host: function

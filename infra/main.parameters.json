@@ -12,7 +12,22 @@
       "value": "${AZURE_PRINCIPAL_ID}"
     },
     "vnetEnabled": {
-      "value": "${VNET_ENABLED}"
+      "value": "${VNET_ENABLED=false}"
+    },
+    "dnsSubscriptionId": {
+      "value": "${DNS_SUBSCRIPTION_ID}"
+    },
+    "dnsResourceGroupName": {
+      "value": "${DNS_RESOURCE_GROUP_NAME=domains-dns}"
+    },
+    "dnsZoneName": {
+      "value": "${DNS_ZONE_NAME=title.dev}"
+    },
+    "azureAdTenantId": {
+      "value": "${AZURE_AD_TENANT_ID}"
+    },
+    "azureAdClientId": {
+      "value": "${AZURE_AD_CLIENT_ID}"
     }
   }
 }

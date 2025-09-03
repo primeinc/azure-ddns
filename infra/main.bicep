@@ -59,6 +59,23 @@ param vNetName string = ''
 @description('Id of the user identity to be used for testing and debugging. This is not required in production. Leave empty if not needed.')
 param principalId string = deployer().objectId
 
+// DNS Configuration for cross-subscription access
+@description('Subscription ID containing the DNS zone')
+param dnsSubscriptionId string
+
+@description('Resource group containing the DNS zone')
+param dnsResourceGroupName string = 'domains-dns'
+
+@description('DNS zone name to update')
+param dnsZoneName string = 'title.dev'
+
+// Azure AD Configuration for MSAL
+@description('Azure AD tenant ID for MSAL authentication')
+param azureAdTenantId string
+
+@description('Azure AD application (client) ID for MSAL')
+param azureAdClientId string
+
 var abbrs = loadJsonContent('./abbreviations.json')
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
 var tags = { 'azd-env-name': environmentName }
@@ -111,6 +128,7 @@ module api './app/api.bicep' = {
     appServicePlanId: appServicePlan.outputs.resourceId
     runtimeName: 'dotnet-isolated'
     runtimeVersion: '8.0'
+    serviceName: 'ddns'
     storageAccountName: storage.outputs.name
     enableBlob: storageEndpointConfig.enableBlob
     enableQueue: storageEndpointConfig.enableQueue
