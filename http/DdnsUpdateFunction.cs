@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net;
 using System.Text;
 using System.Threading.Tasks;
+using Azure.Core;
 using Azure.Identity;
 using Azure.ResourceManager;
 using Azure.ResourceManager.Dns;
@@ -204,8 +205,11 @@ namespace Company.Function
                 _logger.LogInformation($"[{invocationId}] Target subscription: {subscriptionId}");
                 _logger.LogInformation($"[{invocationId}] Target resource group: {resourceGroupName}");
                 
-                // Use managed identity in production, DefaultAzureCredential for local dev
-                var credential = new DefaultAzureCredential();
+                // Use managed identity with explicit client ID for user-assigned identity
+                var clientId = Environment.GetEnvironmentVariable("AZURE_CLIENT_ID");
+                TokenCredential credential = !string.IsNullOrEmpty(clientId) 
+                    ? new ManagedIdentityCredential(clientId) 
+                    : new DefaultAzureCredential();
                 var armClient = new ArmClient(credential);
                 
                 // Get the DNS zone

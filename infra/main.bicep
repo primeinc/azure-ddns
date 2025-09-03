@@ -137,6 +137,13 @@ module api './app/api.bicep' = {
     identityId: apiUserAssignedIdentity.outputs.resourceId
     identityClientId: apiUserAssignedIdentity.outputs.clientId
     appSettings: {
+      AZURE_CLIENT_ID: apiUserAssignedIdentity.outputs.clientId
+      DNS_SUBSCRIPTION_ID: dnsSubscriptionId
+      DNS_RESOURCE_GROUP: dnsResourceGroupName
+      DNS_ZONE_NAME: dnsZoneName
+      DDNS_SUBDOMAIN: 'ddns'
+      DDNS_USERNAME: 'admin' // TODO: Move to Key Vault
+      DDNS_PASSWORD: 'password' // TODO: Move to Key Vault
     }
     virtualNetworkSubnetId: vnetEnabled ? serviceVirtualNetwork.outputs.appSubnetID : ''
   }
@@ -240,6 +247,19 @@ module monitoring 'br/public:avm/res/insights/component:0.6.0' = {
     tags: tags
     workspaceResourceId: logAnalytics.outputs.resourceId
     disableLocalAuth: true
+  }
+}
+
+// DNS RBAC Configuration for cross-subscription access
+// Only deploy if DNS configuration parameters are provided
+module dnsRbac './app/dns-rbac.bicep' = if (!empty(dnsSubscriptionId) && !empty(dnsZoneName)) {
+  name: '${uniqueString(deployment().name, location)}-dnsrbac'
+  scope: subscription(dnsSubscriptionId) // Deploy to the DNS subscription
+  params: {
+    managedIdentityPrincipalId: apiUserAssignedIdentity.outputs.principalId
+    dnsZoneName: dnsZoneName
+    dnsZoneResourceGroupName: dnsResourceGroupName
+    dnsZoneSubscriptionId: dnsSubscriptionId
   }
 }
 
