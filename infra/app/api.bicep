@@ -115,5 +115,42 @@ resource api 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
+// Configure EasyAuth for Azure AD authentication
+resource auth 'Microsoft.Web/sites/config@2024-11-01' = {
+  name: 'authsettingsV2'
+  parent: api
+  properties: {
+    platform: {
+      enabled: true
+      runtimeVersion: '~1'
+    }
+    globalValidation: {
+      requireAuthentication: false
+      unauthenticatedClientAction: 'AllowAnonymous'
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          openIdIssuer: 'https://login.microsoftonline.com/${tenant().tenantId}/v2.0'
+          clientId: appSettings.AZURE_AD_CLIENT_ID ?? ''
+        }
+        validation: {
+          allowedAudiences: [
+            appSettings.AZURE_AD_CLIENT_ID ?? ''
+            'api://${appSettings.AZURE_AD_CLIENT_ID ?? ''}'
+          ]
+        }
+      }
+    }
+    login: {
+      preserveUrlFragmentsForLogins: false
+      tokenStore: {
+        enabled: true
+      }
+    }
+  }
+}
+
 output SERVICE_API_NAME string = api.name
 output SERVICE_API_IDENTITY_PRINCIPAL_ID string = identityType == 'SystemAssigned' ? api.identity.?principalId ?? '' : ''

@@ -21,7 +21,6 @@ var host = new HostBuilder()
         
         // Add custom services for DDNS functionality
         services.AddSingleton<Company.Function.Services.TableStorageService>();
-        services.AddSingleton<Company.Function.Services.MsalAuthenticationService>();
         services.AddScoped<Company.Function.Services.ApiKeyService>();
     })
     .ConfigureLogging((context, logging) =>

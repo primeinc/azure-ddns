@@ -69,11 +69,11 @@ param dnsResourceGroupName string = 'domains-dns'
 @description('DNS zone name to update')
 param dnsZoneName string = 'title.dev'
 
-// Azure AD Configuration for MSAL
-@description('Azure AD tenant ID for MSAL authentication')
+// Azure AD Configuration for EasyAuth
+@description('Azure AD tenant ID for authentication')
 param azureAdTenantId string
 
-@description('Azure AD application (client) ID for MSAL')
+@description('Azure AD application (client) ID')
 param azureAdClientId string
 
 var abbrs = loadJsonContent('./abbreviations.json')
@@ -149,7 +149,6 @@ module api './app/api.bicep' = {
       KEY_VAULT_URI: keyVault.outputs.uri
       AZURE_AD_TENANT_ID: azureAdTenantId
       AZURE_AD_CLIENT_ID: azureAdClientId
-      AZURE_AD_REDIRECT_URI: 'https://${functionAppName}.azurewebsites.net/.auth/login/aad/callback'
       AZURE_STORAGE_ACCOUNT_NAME: storage.outputs.name
     }
     virtualNetworkSubnetId: vnetEnabled ? serviceVirtualNetwork.outputs.appSubnetID : ''
@@ -181,7 +180,7 @@ module keyVault 'br/public:avm/res/key-vault/vault:0.9.0' = {
     roleAssignments: [
       {
         principalId: apiUserAssignedIdentity.outputs.principalId
-        roleDefinitionIdOrName: '4633458b-17de-408a-b874-0445c86b69e6' // Key Vault Secrets User
+        roleDefinitionIdOrName: 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7' // Key Vault Secrets Officer (read/write)
         principalType: 'ServicePrincipal'
       }
       {

@@ -6,26 +6,101 @@ using Microsoft.Extensions.Logging;
 using Company.Function.Services;
 using System.Text;
 using System.Text.Json;
+using Azure.Data.Tables;
 
 namespace Company.Function
 {
     public class HostnameManagementFunction
     {
         private readonly ILogger<HostnameManagementFunction> _logger;
-        private readonly MsalAuthenticationService _authService;
         private readonly TableStorageService _tableStorage;
         private readonly ApiKeyService _apiKeyService;
 
         public HostnameManagementFunction(
             ILogger<HostnameManagementFunction> logger,
-            MsalAuthenticationService authService,
             TableStorageService tableStorage,
             ApiKeyService apiKeyService)
         {
             _logger = logger;
-            _authService = authService;
             _tableStorage = tableStorage;
             _apiKeyService = apiKeyService;
+        }
+
+        private static (string? oid, string? upn) GetUser(HttpRequestData req, ILogger log)
+        {
+            log.LogInformation("[AUDIT-AUTH] Attempting to extract user from X-MS-CLIENT-PRINCIPAL header");
+            
+            // Log all headers for debugging
+            foreach (var header in req.Headers)
+            {
+                var headerValue = header.Value?.FirstOrDefault();
+                if (header.Key.StartsWith("X-MS-"))
+                {
+                    log.LogInformation($"[AUDIT-HEADER] {header.Key}: {(string.IsNullOrEmpty(headerValue) ? "EMPTY" : headerValue.Substring(0, Math.Min(50, headerValue.Length)))}...");
+                }
+            }
+            
+            if (!req.Headers.TryGetValues("X-MS-CLIENT-PRINCIPAL", out var vals))
+            {
+                log.LogWarning("[AUDIT-AUTH] X-MS-CLIENT-PRINCIPAL header not found");
+                return (null, null);
+            }
+
+            var raw = vals.FirstOrDefault();
+            if (string.IsNullOrEmpty(raw))
+            {
+                log.LogWarning("[AUDIT-AUTH] X-MS-CLIENT-PRINCIPAL header is empty");
+                return (null, null);
+            }
+
+            log.LogInformation($"[AUDIT-AUTH] X-MS-CLIENT-PRINCIPAL header found with length: {raw.Length}");
+
+            try
+            {
+                var json = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(raw));
+                log.LogInformation($"[AUDIT-AUTH] Decoded principal JSON length: {json.Length}");
+                
+                using var doc = JsonDocument.Parse(json);
+                string? oid = null, upn = null;
+
+                if (doc.RootElement.TryGetProperty("claims", out var claims))
+                {
+                    log.LogInformation($"[AUDIT-AUTH] Found {claims.GetArrayLength()} claims in principal");
+                    
+                    foreach (var claim in claims.EnumerateArray())
+                    {
+                        if (claim.TryGetProperty("typ", out var typ) && claim.TryGetProperty("val", out var val))
+                        {
+                            var typeStr = typ.GetString();
+                            var valStr = val.GetString();
+                            log.LogDebug($"[AUDIT-CLAIM] Type: {typeStr}, Value: {valStr?.Substring(0, Math.Min(20, valStr?.Length ?? 0))}...");
+                            
+                            if (typeStr == "http://schemas.microsoft.com/identity/claims/objectidentifier") 
+                            {
+                                oid = valStr;
+                                log.LogInformation($"[AUDIT-AUTH] Found OID: {oid}");
+                            }
+                            if (typeStr == "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn") 
+                            {
+                                upn = valStr;
+                                log.LogInformation($"[AUDIT-AUTH] Found UPN: {upn}");
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    log.LogWarning("[AUDIT-AUTH] No claims found in X-MS-CLIENT-PRINCIPAL");
+                }
+                
+                log.LogInformation($"[AUDIT-AUTH-SUCCESS] EasyAuth principal extracted - oid={oid ?? "NULL"} upn={upn ?? "NULL"}");
+                return (oid, upn);
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, $"[AUDIT-AUTH-ERROR] Failed to parse X-MS-CLIENT-PRINCIPAL. Raw value: {raw.Substring(0, Math.Min(100, raw.Length))}...");
+                return (null, null);
+            }
         }
 
         [Function("ManageHostname")]
@@ -33,293 +108,691 @@ namespace Company.Function
             [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "manage/{hostname}")] HttpRequestData req,
             string hostname)
         {
-            _logger.LogInformation($"Management request for hostname: {hostname}");
-
-            // Extract bearer token from Authorization header
-            string authHeader = null;
-            if (req.Headers.TryGetValues("Authorization", out var authValues))
+            try
             {
-                authHeader = authValues.FirstOrDefault();
-            }
-            var token = _authService.ExtractBearerToken(authHeader);
+                _logger.LogInformation($"[AUDIT-MANAGE] Management request for hostname: {hostname}");
+                _logger.LogInformation($"[AUDIT-REQUEST] Method: {req.Method}, URL: {req.Url}, Headers Count: {req.Headers.Count()}");
 
-            if (string.IsNullOrEmpty(token))
-            {
-                // No token provided, redirect to Azure AD login
-                var authUrl = _authService.GenerateAuthenticationUrl(hostname);
-                var response = req.CreateResponse(System.Net.HttpStatusCode.Redirect);
-                response.Headers.Add("Location", authUrl);
-                return response;
-            }
+                // Get user from EasyAuth header
+                var (userId, userEmail) = GetUser(req, _logger);
 
-            // Validate the token
-            var principal = await _authService.ValidateTokenAsync(token);
-            if (principal == null)
-            {
-                var unauthorizedResponse = req.CreateResponse(System.Net.HttpStatusCode.Unauthorized);
-                await unauthorizedResponse.WriteStringAsync("Invalid or expired token");
-                return unauthorizedResponse;
-            }
+                if (string.IsNullOrEmpty(userId))
+                {
+                    // No authentication, redirect to Azure AD login via EasyAuth
+                    _logger.LogInformation($"[AUDIT-MANAGE] No authentication for {hostname}, redirecting to EasyAuth login");
+                    var response = req.CreateResponse(System.Net.HttpStatusCode.Redirect);
+                    var encodedRedirect = Uri.EscapeDataString($"/api/manage/{hostname}");
+                    var redirectUrl = $"https://{req.Url.Host}/.auth/login/aad?post_login_redirect_url={encodedRedirect}";
+                    _logger.LogInformation($"[AUDIT-REDIRECT] Redirecting to: {redirectUrl}");
+                    response.Headers.Add("Location", redirectUrl);
+                    return response;
+                }
 
-            var principalId = _authService.GetPrincipalIdFromToken(principal);
-            var email = _authService.GetEmailFromToken(principal);
-
-            if (string.IsNullOrEmpty(principalId))
-            {
-                var badRequestResponse = req.CreateResponse(System.Net.HttpStatusCode.BadRequest);
-                await badRequestResponse.WriteStringAsync("Could not extract principal ID from token");
-                return badRequestResponse;
-            }
+                _logger.LogInformation($"[AUDIT-MANAGE] Authenticated user {userEmail} (ID: {userId}) accessing hostname {hostname}");
 
             // Check if hostname is already claimed
-            var currentOwner = await _tableStorage.GetHostnameOwnerAsync(hostname);
+            var existingOwnerPrincipalId = await _tableStorage.GetHostnameOwnerAsync(hostname);
             
-            if (currentOwner != null && currentOwner != principalId)
+            if (existingOwnerPrincipalId == null)
             {
+                // Get the user's email from the header if not in claims
+                if (string.IsNullOrEmpty(userEmail))
+                {
+                    req.Headers.TryGetValues("X-MS-CLIENT-PRINCIPAL-NAME", out var nameVals);
+                    userEmail = nameVals?.FirstOrDefault() ?? "Unknown";
+                    _logger.LogInformation($"[AUDIT-CLAIM] Got email from X-MS-CLIENT-PRINCIPAL-NAME: {userEmail}");
+                }
+                
+                // Hostname not claimed yet, claim it for this user
+                _logger.LogInformation($"[AUDIT-CLAIM] Hostname {hostname} not claimed, attempting to claim for user {userId} ({userEmail})");
+                var claimed = await _tableStorage.ClaimHostnameAsync(hostname, userId, userEmail);
+                
+                if (!claimed)
+                {
+                    _logger.LogError($"[AUDIT-CLAIM-FAIL] Failed to claim hostname {hostname} for user {userId}");
+                    var errorResponse = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
+                    await errorResponse.WriteStringAsync("Failed to claim hostname");
+                    return errorResponse;
+                }
+                
+                _logger.LogInformation($"[AUDIT-CLAIM-SUCCESS] Hostname {hostname} successfully claimed by user {userId}");
+                
+                // Generate initial API key
+                _logger.LogInformation($"[AUDIT-API-KEY] Generating initial API key for hostname {hostname}");
+                var apiKey = await _apiKeyService.GenerateApiKeyAsync(hostname, userId, userEmail);
+                _logger.LogInformation($"[AUDIT-API-KEY-SUCCESS] Generated API key for new hostname {hostname}, key starts with: {apiKey?.Substring(0, 8)}...");
+                
+                // Return management page with new API key
+                _logger.LogInformation($"[AUDIT-MANAGE] Returning management page with new API key for {hostname}");
+                return await CreateManagementPage(req, hostname, userEmail, apiKey, true);
+            }
+            else if (existingOwnerPrincipalId != userId)
+            {
+                // Hostname claimed by another user
+                _logger.LogWarning($"[AUDIT-MANAGE] User {userId} attempted to access hostname {hostname} owned by {existingOwnerPrincipalId}");
                 var forbiddenResponse = req.CreateResponse(System.Net.HttpStatusCode.Forbidden);
                 await forbiddenResponse.WriteStringAsync($"Hostname {hostname} is already claimed by another user");
                 return forbiddenResponse;
             }
-
-            if (currentOwner == null)
-            {
-                // Claim the hostname
-                var claimed = await _tableStorage.ClaimHostnameAsync(hostname, principalId, email ?? "unknown");
-                if (!claimed)
-                {
-                    var conflictResponse = req.CreateResponse(System.Net.HttpStatusCode.Conflict);
-                    await conflictResponse.WriteStringAsync("Failed to claim hostname");
-                    return conflictResponse;
-                }
-                _logger.LogInformation($"Hostname {hostname} claimed by {principalId}");
-            }
-
-            // Get or generate API key
-            var apiKeys = await _tableStorage.GetApiKeysForOwnerAsync(principalId);
-            var existingKey = apiKeys.FirstOrDefault(k => k.RowKey == hostname);
-            
-            string apiKey;
-            if (existingKey == null)
-            {
-                // Generate new API key
-                apiKey = await _apiKeyService.GenerateApiKeyAsync(hostname, principalId);
-                _logger.LogInformation($"Generated new API key for hostname {hostname}");
-            }
             else
             {
-                // For security, we can't retrieve the original API key
-                // User must generate a new one if needed
-                apiKey = "[Use existing key or generate new one]";
+                // User owns this hostname, show management page
+                _logger.LogInformation($"[AUDIT-MANAGE] Owner {userId} accessing their hostname {hostname}");
+                
+                // Get all API keys for this hostname
+                var apiKeys = await _tableStorage.GetApiKeysForHostnameAsync(hostname);
+                _logger.LogInformation($"[AUDIT-MANAGE] Found {apiKeys.Count} API keys for hostname {hostname}");
+                
+                // Get recent update history
+                var updateHistory = await _tableStorage.GetUpdateHistoryAsync(hostname, 10);
+                
+                // Get the user's email from the header if not in claims
+                if (string.IsNullOrEmpty(userEmail))
+                {
+                    req.Headers.TryGetValues("X-MS-CLIENT-PRINCIPAL-NAME", out var nameVals);
+                    userEmail = nameVals?.FirstOrDefault() ?? "Unknown";
+                    _logger.LogInformation($"[AUDIT-MANAGE] Got email from X-MS-CLIENT-PRINCIPAL-NAME: {userEmail}");
+                }
+                
+                // Return management page
+                _logger.LogInformation($"[AUDIT-MANAGE] Returning management page for owner {userId} of hostname {hostname}");
+                return await CreateManagementPageWithKeys(req, hostname, userEmail, apiKeys, updateHistory);
             }
-
-            // Get update history
-            var history = await _tableStorage.GetUpdateHistoryAsync(hostname, 10);
-
-            // Build management dashboard HTML
-            var html = GenerateManagementDashboard(hostname, email ?? principalId, apiKey, history);
-            
-            var okResponse = req.CreateResponse(System.Net.HttpStatusCode.OK);
-            okResponse.Headers.Add("Content-Type", "text/html; charset=utf-8");
-            await okResponse.WriteStringAsync(html);
-            return okResponse;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"[AUDIT-ERROR] Failed to process management request for hostname {hostname}");
+                var errorResponse = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
+                await errorResponse.WriteStringAsync($"Internal server error: {ex.Message}");
+                return errorResponse;
+            }
         }
 
-        [Function("GenerateApiKey")]
-        public async Task<HttpResponseData> GenerateApiKey(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "api/key/generate")] HttpRequestData req)
+        private async Task<HttpResponseData> CreateManagementPage(
+            HttpRequestData req, 
+            string hostname, 
+            string? userEmail, 
+            string? apiKey,
+            bool isNew,
+            IEnumerable<Azure.Data.Tables.TableEntity>? updateHistory = null)
         {
-            // Extract and validate token
-            var authHeader = req.Headers.GetValues("Authorization")?.FirstOrDefault();
-            var token = _authService.ExtractBearerToken(authHeader);
-
-            if (string.IsNullOrEmpty(token))
-            {
-                var unauthorizedResponse = req.CreateResponse(System.Net.HttpStatusCode.Unauthorized);
-                await unauthorizedResponse.WriteStringAsync("Authentication required");
-                return unauthorizedResponse;
-            }
-
-            var principal = await _authService.ValidateTokenAsync(token);
-            if (principal == null)
-            {
-                var unauthorizedResponse = req.CreateResponse(System.Net.HttpStatusCode.Unauthorized);
-                await unauthorizedResponse.WriteStringAsync("Invalid or expired token");
-                return unauthorizedResponse;
-            }
-
-            var principalId = _authService.GetPrincipalIdFromToken(principal);
-            if (string.IsNullOrEmpty(principalId))
-            {
-                var badRequestResponse = req.CreateResponse(System.Net.HttpStatusCode.BadRequest);
-                await badRequestResponse.WriteStringAsync("Could not extract principal ID from token");
-                return badRequestResponse;
-            }
-
-            // Parse request body
-            var requestBody = await req.ReadAsStringAsync();
-            if (string.IsNullOrEmpty(requestBody))
-            {
-                var badRequestResponse = req.CreateResponse(System.Net.HttpStatusCode.BadRequest);
-                await badRequestResponse.WriteStringAsync("Request body is required");
-                return badRequestResponse;
-            }
-            
-            var request = JsonSerializer.Deserialize<GenerateKeyRequest>(requestBody);
-            
-            if (request == null || string.IsNullOrEmpty(request.Hostname))
-            {
-                var badRequestResponse = req.CreateResponse(System.Net.HttpStatusCode.BadRequest);
-                await badRequestResponse.WriteStringAsync("Hostname is required");
-                return badRequestResponse;
-            }
-
-            // Verify ownership
-            var owner = await _tableStorage.GetHostnameOwnerAsync(request.Hostname);
-            if (owner != principalId)
-            {
-                var forbiddenResponse = req.CreateResponse(System.Net.HttpStatusCode.Forbidden);
-                await forbiddenResponse.WriteStringAsync("You do not own this hostname");
-                return forbiddenResponse;
-            }
-
-            // Generate new API key
-            var apiKey = await _apiKeyService.GenerateApiKeyAsync(request.Hostname, principalId);
-            
             var response = req.CreateResponse(System.Net.HttpStatusCode.OK);
-            await response.WriteAsJsonAsync(new { apiKey, hostname = request.Hostname });
-            return response;
-        }
+            response.Headers.Add("Content-Type", "text/html; charset=utf-8");
 
-        private string GenerateManagementDashboard(string hostname, string owner, string apiKey, List<Azure.Data.Tables.TableEntity> history)
-        {
-            var currentIp = history.FirstOrDefault()?["IpAddress"]?.ToString() ?? "Not set";
-            var lastUpdate = history.FirstOrDefault()?["Timestamp"]?.ToString() ?? "Never";
-            
-            var historyHtml = new StringBuilder();
-            foreach (var update in history.Take(5))
+            var apiKeyDisplay = apiKey != null 
+                ? $@"<div class='api-key-section'>
+                    <h2>Your API Key</h2>
+                    <div class='api-key'>{apiKey}</div>
+                    <p class='warning'>⚠️ Save this key securely. It won't be shown again.</p>
+                   </div>"
+                : @"<div class='info-box'>
+                    <p>Your API key is already configured. If you need a new one, contact support.</p>
+                   </div>";
+
+            var historyHtml = "";
+            if (updateHistory != null && updateHistory.Any())
             {
-                var timestamp = update["Timestamp"]?.ToString() ?? "";
-                var ip = update["IpAddress"]?.ToString() ?? "";
-                var success = update["Success"]?.ToString() ?? "";
-                var statusClass = success == "True" ? "success" : "failure";
-                historyHtml.AppendLine($"<tr class='{statusClass}'><td>{timestamp}</td><td>{ip}</td><td>{success}</td></tr>");
+                var rows = string.Join("\n", updateHistory.Select(h => 
+                {
+                    var timestamp = h.GetDateTimeOffset("Timestamp") ?? DateTimeOffset.MinValue;
+                    var ipAddress = h.GetString("IpAddress") ?? "N/A";
+                    var success = h.GetBoolean("Success") ?? false;
+                    var status = success ? "Success" : "Failed";
+                    return $"<tr><td>{timestamp:yyyy-MM-dd HH:mm:ss}</td><td>{ipAddress}</td><td>{status}</td></tr>";
+                }));
+                historyHtml = $@"
+                <h2>Recent Updates</h2>
+                <table class='history'>
+                    <tr><th>Timestamp</th><th>IP Address</th><th>Status</th></tr>
+                    {rows}
+                </table>";
             }
 
-            return $@"<!DOCTYPE html>
+            var html = $@"
+<!DOCTYPE html>
 <html>
 <head>
     <title>DDNS Management - {hostname}</title>
     <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #f5f5f5; }}
-        .dashboard {{ background: white; border-radius: 8px; padding: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-        h1 {{ color: #333; border-bottom: 2px solid #0078d4; padding-bottom: 10px; }}
-        .info-grid {{ display: grid; grid-template-columns: 150px 1fr; gap: 15px; margin: 20px 0; }}
-        .info-label {{ font-weight: 600; color: #666; }}
-        .info-value {{ font-family: monospace; background: #f8f8f8; padding: 5px 10px; border-radius: 4px; }}
-        .api-key {{ background: #fffbf0; border: 1px solid #ffa500; padding: 10px; border-radius: 4px; margin: 20px 0; }}
-        .commands {{ background: #f0f8ff; border: 1px solid #0078d4; padding: 15px; border-radius: 4px; margin: 20px 0; }}
-        code {{ background: #2b2b2b; color: #f8f8f2; padding: 10px; border-radius: 4px; display: block; margin: 10px 0; overflow-x: auto; }}
-        table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-        th {{ background: #0078d4; color: white; padding: 10px; text-align: left; }}
-        td {{ padding: 10px; border-bottom: 1px solid #ddd; }}
-        .success {{ background: #f0fff0; }}
-        .failure {{ background: #fff0f0; }}
-        button {{ background: #0078d4; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin: 10px 0; }}
-        button:hover {{ background: #005a9e; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }}
+        .container {{ background: white; padding: 40px; border-radius: 12px; box-shadow: 0 20px 40px rgba(0,0,0,0.1); max-width: 900px; margin: 0 auto; }}
+        h1 {{ color: #333; margin-bottom: 10px; }}
+        .status {{ display: inline-block; padding: 4px 12px; border-radius: 20px; background: #10b981; color: white; font-size: 14px; margin-left: 10px; }}
+        .info-box {{ background: #f0f9ff; border-left: 4px solid #3b82f6; padding: 20px; margin: 20px 0; border-radius: 4px; }}
+        .api-key {{ font-family: 'Courier New', monospace; background: #1e293b; color: #10b981; padding: 20px; border-radius: 8px; word-break: break-all; font-size: 16px; margin: 10px 0; }}
+        .warning {{ color: #ef4444; font-weight: bold; }}
+        .command {{ background: #1e293b; color: #f1f5f9; padding: 20px; border-radius: 8px; overflow-x: auto; margin: 10px 0; font-family: 'Courier New', monospace; }}
+        h2 {{ color: #475569; margin-top: 30px; }}
+        .history {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+        .history th {{ background: #f1f5f9; padding: 10px; text-align: left; }}
+        .history td {{ padding: 10px; border-bottom: 1px solid #e5e7eb; }}
+        .user-info {{ color: #64748b; margin-bottom: 20px; }}
     </style>
 </head>
 <body>
-    <div class='dashboard'>
-        <h1>🔒 DDNS Management Dashboard</h1>
+    <div class='container'>
+        <h1>{hostname} <span class='status'>Active</span></h1>
+        <div class='user-info'>Managed by: {userEmail ?? "Unknown"}</div>
         
-        <div class='info-grid'>
-            <div class='info-label'>Hostname:</div>
-            <div class='info-value'>{hostname}.ddns.title.dev</div>
-            
-            <div class='info-label'>Owner:</div>
-            <div class='info-value'>{owner}</div>
-            
-            <div class='info-label'>Current IP:</div>
-            <div class='info-value'>{currentIp}</div>
-            
-            <div class='info-label'>Last Updated:</div>
-            <div class='info-value'>{lastUpdate}</div>
+        {apiKeyDisplay}
+        
+        <h2>Update Your Dynamic IP</h2>
+        
+        <h3>Using curl:</h3>
+        <div class='command'>curl -u ""{hostname.Split('.')[0]}:{apiKey}"" ""https://{req.Url.Host}/api/nic/update?hostname={hostname}&myip=auto""</div>
+        
+        <h3>Using wget:</h3>
+        <div class='command'>wget --auth-no-challenge --user=""{hostname.Split('.')[0]}"" --password=""{apiKey}"" ""https://{req.Url.Host}/api/nic/update?hostname={hostname}&myip=auto""</div>
+        
+        <h3>Router Configuration (DynDNS2 Protocol):</h3>
+        <div class='info-box'>
+            <strong>Service Type:</strong> DynDNS or Custom<br>
+            <strong>Server/URL:</strong> {req.Url.Host}<br>
+            <strong>Username:</strong> {hostname.Split('.')[0]}<br>
+            <strong>Password:</strong> {apiKey}<br>
+            <strong>Hostname:</strong> {hostname}
         </div>
-
-        <div class='api-key'>
-            <h2>🔑 API Key</h2>
-            <div class='info-value' id='apiKey'>{apiKey}</div>
-            <button onclick='generateNewKey()'>Generate New API Key</button>
-            <p><small>⚠️ Save this key securely. It cannot be retrieved once you leave this page.</small></p>
-        </div>
-
-        <div class='commands'>
-            <h2>📡 Update Commands</h2>
-            <p>Use these commands to update your DDNS record from your router or device:</p>
-            
-            <h3>Using curl:</h3>
-            <code>curl -u {hostname}:[API_KEY] ""https://ddns.title.dev/nic/update?hostname={hostname}.ddns.title.dev&myip=auto""</code>
-            
-            <h3>Using wget:</h3>
-            <code>wget --auth-no-challenge --user={hostname} --password=[API_KEY] ""https://ddns.title.dev/nic/update?hostname={hostname}.ddns.title.dev&myip=auto""</code>
-            
-            <h3>UniFi Router Configuration:</h3>
-            <code>
-Server: ddns.title.dev<br>
-Hostname: {hostname}.ddns.title.dev<br>
-Username: {hostname}<br>
-Password: [API_KEY]
-            </code>
-        </div>
-
-        <h2>📊 Recent Updates</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Timestamp</th>
-                    <th>IP Address</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                {historyHtml}
-            </tbody>
-        </table>
+        
+        {historyHtml}
+        
+        <p style='margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; color: #64748b; font-size: 14px;'>
+            <a href='/.auth/logout'>Sign out</a> | 
+            Generated by Azure DDNS Service
+        </p>
     </div>
-
-    <script>
-        async function generateNewKey() {{
-            if (!confirm('Are you sure? This will invalidate your current API key.')) return;
-            
-            try {{
-                const response = await fetch('/api/key/generate', {{
-                    method: 'POST',
-                    headers: {{
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer ' + localStorage.getItem('token')
-                    }},
-                    body: JSON.stringify({{ hostname: '{hostname}' }})
-                }});
-                
-                if (response.ok) {{
-                    const data = await response.json();
-                    document.getElementById('apiKey').textContent = data.apiKey;
-                    alert('New API key generated successfully!');
-                }} else {{
-                    alert('Failed to generate new API key: ' + await response.text());
-                }}
-            }} catch (error) {{
-                alert('Error: ' + error.message);
-            }}
-        }}
-    </script>
 </body>
 </html>";
+            
+            await response.WriteStringAsync(html);
+            return response;
         }
 
-        private class GenerateKeyRequest
+        private async Task<HttpResponseData> CreateManagementPageWithKeys(
+            HttpRequestData req,
+            string hostname,
+            string? userEmail,
+            List<Azure.Data.Tables.TableEntity> apiKeys,
+            IEnumerable<Azure.Data.Tables.TableEntity>? updateHistory = null)
         {
-            public string Hostname { get; set; } = string.Empty;
+            var response = req.CreateResponse(System.Net.HttpStatusCode.OK);
+            response.Headers.Add("Content-Type", "text/html; charset=utf-8");
+
+            // Get the most recent active API key for examples (if any)
+            var latestKey = apiKeys?
+                .Where(k => k.GetBoolean("IsActive") ?? false)
+                .OrderByDescending(k => k.GetDateTimeOffset("CreatedAt"))
+                .FirstOrDefault();
+            var exampleKey = latestKey?.PartitionKey ?? "YOUR_API_KEY_HERE";
+
+            // Build API keys table with management buttons
+            var apiKeysHtml = "";
+            if (apiKeys != null && apiKeys.Count > 0)
+            {
+                var rows = string.Join("\n", apiKeys.Select((key, index) =>
+                {
+                    var keyId = key.PartitionKey ?? "unknown";
+                    var createdAt = key.GetDateTimeOffset("CreatedAt") ?? DateTimeOffset.MinValue;
+                    var createdBy = key.GetString("CreatedByEmail") ?? "Unknown";
+                    var lastUsed = key.GetDateTimeOffset("LastUsed");
+                    var lastIp = key.GetString("LastUsedFromIp") ?? "Never";
+                    var useCount = key.GetInt32("UseCount") ?? 0;
+                    var isActive = key.GetBoolean("IsActive") ?? false;
+                    
+                    var statusBadge = isActive 
+                        ? "<span class='badge badge-success'>Active</span>" 
+                        : "<span class='badge badge-danger'>Revoked</span>";
+                    var lastUsedStr = lastUsed?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Never";
+                    
+                    // Full key display with copy button
+                    var keyDisplay = $@"
+                        <div class='key-display'>
+                            <input type='password' id='key-{index}' value='{keyId}' readonly class='key-input'>
+                            <button onclick='toggleKey({index})' class='btn-icon' title='Show/Hide'>👁️</button>
+                            <button onclick='copyKey({index})' class='btn-icon' title='Copy'>📋</button>
+                        </div>";
+                    
+                    var actions = isActive 
+                        ? $"<button onclick='revokeKey(\"{keyId}\")' class='btn-danger btn-sm'>Revoke</button>"
+                        : "<span class='text-muted'>Revoked</span>";
+                    
+                    return $@"<tr>
+                        <td>{keyDisplay}</td>
+                        <td>{createdBy}</td>
+                        <td>{createdAt:yyyy-MM-dd HH:mm:ss}</td>
+                        <td>{lastUsedStr}</td>
+                        <td>{lastIp}</td>
+                        <td>{useCount}</td>
+                        <td>{statusBadge}</td>
+                        <td>{actions}</td>
+                    </tr>";
+                }));
+                
+                apiKeysHtml = $@"
+                <div class='section'>
+                    <div class='section-header'>
+                        <h2>API Keys Management</h2>
+                        <div class='btn-group'>
+                            <button onclick='generateNewKey()' class='btn btn-primary'>🔑 Generate New Key</button>
+                            <button onclick='revokeAllKeys()' class='btn btn-danger'>⛔ Revoke All Keys</button>
+                        </div>
+                    </div>
+                    <table class='table'>
+                        <thead>
+                            <tr>
+                                <th style='width: 300px'>API Key</th>
+                                <th>Created By</th>
+                                <th>Created At</th>
+                                <th>Last Used</th>
+                                <th>Last IP</th>
+                                <th>Uses</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows}
+                        </tbody>
+                    </table>
+                </div>";
+            }
+            else
+            {
+                apiKeysHtml = @"
+                <div class='section'>
+                    <h2>API Keys Management</h2>
+                    <div class='alert alert-info'>
+                        <p>No API keys found. Generate one to start using DDNS updates.</p>
+                        <button onclick='generateNewKey()' class='btn btn-primary'>🔑 Generate Your First API Key</button>
+                    </div>
+                </div>";
+            }
+
+            // Build update history
+            var historyHtml = "";
+            if (updateHistory != null && updateHistory.Any())
+            {
+                var rows = string.Join("\n", updateHistory.Select(h =>
+                {
+                    var timestamp = h.GetDateTimeOffset("Timestamp") ?? DateTimeOffset.MinValue;
+                    var ipAddress = h.GetString("IpAddress") ?? "N/A";
+                    var success = h.GetBoolean("Success") ?? false;
+                    var apiKeyUsed = h.GetString("ApiKeyId") ?? "Unknown";
+                    var statusBadge = success 
+                        ? "<span class='badge badge-success'>Success</span>" 
+                        : "<span class='badge badge-danger'>Failed</span>";
+                    return $"<tr><td>{timestamp:yyyy-MM-dd HH:mm:ss}</td><td>{ipAddress}</td><td class='text-muted'>{apiKeyUsed.Substring(0, Math.Min(8, apiKeyUsed.Length))}...</td><td>{statusBadge}</td></tr>";
+                }));
+                historyHtml = $@"
+                <div class='section'>
+                    <h2>Recent Update History</h2>
+                    <table class='table'>
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>IP Address</th>
+                                <th>API Key Used</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows}
+                        </tbody>
+                    </table>
+                </div>";
+            }
+
+            var html = $@"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DDNS Management - {hostname}</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            min-height: 100vh;
+            padding: 20px;
+        }}
+        .container {{ 
+            background: white; 
+            padding: 40px; 
+            border-radius: 12px; 
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1); 
+            max-width: 1400px; 
+            margin: 0 auto; 
+        }}
+        h1 {{ 
+            color: #1a202c; 
+            margin-bottom: 10px; 
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }}
+        h2 {{
+            color: #2d3748;
+            margin-bottom: 20px;
+        }}
+        .status {{ 
+            display: inline-block; 
+            padding: 4px 12px; 
+            border-radius: 20px; 
+            background: #48bb78; 
+            color: white; 
+            font-size: 14px; 
+            font-weight: 500;
+        }}
+        .user-info {{ 
+            color: #718096; 
+            margin-bottom: 30px; 
+            font-size: 14px;
+        }}
+        .section {{
+            margin-bottom: 40px;
+        }}
+        .section-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }}
+        .config-form {{
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }}
+        .form-group {{
+            margin-bottom: 20px;
+        }}
+        .form-label {{
+            display: block;
+            color: #4a5568;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }}
+        .input-group {{
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }}
+        .form-input {{
+            flex: 1;
+            padding: 10px 12px;
+            border: 1px solid #cbd5e0;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            background: white;
+            color: #2d3748;
+        }}
+        .form-input:read-only {{
+            background: #edf2f7;
+        }}
+        .btn {{
+            padding: 10px 16px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 14px;
+        }}
+        .btn-primary {{
+            background: #4299e1;
+            color: white;
+        }}
+        .btn-primary:hover {{
+            background: #3182ce;
+        }}
+        .btn-danger {{
+            background: #f56565;
+            color: white;
+        }}
+        .btn-danger:hover {{
+            background: #e53e3e;
+        }}
+        .btn-sm {{
+            padding: 6px 12px;
+            font-size: 12px;
+        }}
+        .btn-icon {{
+            width: 36px;
+            height: 36px;
+            padding: 0;
+            border: 1px solid #cbd5e0;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .btn-icon:hover {{
+            background: #edf2f7;
+            border-color: #a0aec0;
+        }}
+        .btn-group {{
+            display: flex;
+            gap: 10px;
+        }}
+        .table {{
+            width: 100%;
+            border-collapse: collapse;
+        }}
+        .table thead th {{
+            background: #f7fafc;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #4a5568;
+            border-bottom: 2px solid #e2e8f0;
+            font-size: 13px;
+            text-transform: uppercase;
+        }}
+        .table tbody td {{
+            padding: 12px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #2d3748;
+            font-size: 14px;
+        }}
+        .table tbody tr:hover {{
+            background: #f7fafc;
+        }}
+        .badge {{
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }}
+        .badge-success {{
+            background: #c6f6d5;
+            color: #22543d;
+        }}
+        .badge-danger {{
+            background: #fed7d7;
+            color: #742a2a;
+        }}
+        .key-display {{
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }}
+        .key-input {{
+            flex: 1;
+            padding: 6px 10px;
+            border: 1px solid #cbd5e0;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            background: white;
+            min-width: 200px;
+        }}
+        .alert {{
+            padding: 16px 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }}
+        .alert-info {{
+            background: #bee3f8;
+            color: #2c5282;
+        }}
+        .command-box {{
+            background: #1a202c;
+            color: #e2e8f0;
+            padding: 16px 20px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            overflow-x: auto;
+            white-space: nowrap;
+        }}
+        .text-muted {{
+            color: #a0aec0;
+        }}
+        footer {{
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #e2e8f0;
+            color: #718096;
+            font-size: 14px;
+            text-align: center;
+        }}
+        footer a {{
+            color: #4299e1;
+            text-decoration: none;
+        }}
+        footer a:hover {{
+            text-decoration: underline;
+        }}
+    </style>
+    <script>
+        function copyToClipboard(text) {{
+            navigator.clipboard.writeText(text).then(() => {{
+                showToast('Copied to clipboard!');
+            }});
+        }}
+        
+        function copyField(fieldId) {{
+            const field = document.getElementById(fieldId);
+            copyToClipboard(field.value);
+        }}
+        
+        function toggleKey(index) {{
+            const input = document.getElementById('key-' + index);
+            input.type = input.type === 'password' ? 'text' : 'password';
+        }}
+        
+        function copyKey(index) {{
+            const input = document.getElementById('key-' + index);
+            copyToClipboard(input.value);
+        }}
+        
+        function generateNewKey() {{
+            if(confirm('Generate a new API key for {hostname}?')) {{
+                window.location.href = '/api/manage/{hostname}/newkey';
+            }}
+        }}
+        
+        function revokeKey(keyId) {{
+            if(confirm('Revoke this API key? It will no longer work for updates.')) {{
+                window.location.href = '/api/manage/{hostname}/revoke?key=' + encodeURIComponent(keyId);
+            }}
+        }}
+        
+        function revokeAllKeys() {{
+            if(confirm('Revoke ALL API keys for {hostname}? This cannot be undone!')) {{
+                window.location.href = '/api/manage/{hostname}/revokeall';
+            }}
+        }}
+        
+        function showToast(message) {{
+            const toast = document.createElement('div');
+            toast.textContent = message;
+            toast.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#48bb78;color:white;padding:12px 20px;border-radius:8px;font-weight:600;z-index:9999;';
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }}
+    </script>
+</head>
+<body>
+    <div class='container'>
+        <h1>{hostname} <span class='status'>Active</span></h1>
+        <div class='user-info'>Managed by: {userEmail ?? "Unknown"}</div>
+        
+        {apiKeysHtml}
+        
+        <div class='section'>
+            <h2>Quick Configuration</h2>
+            
+            <div class='config-form'>
+                <h3 style='margin-bottom: 20px; color: #2d3748;'>DynDNS2 Configuration</h3>
+                
+                <div class='form-group'>
+                    <label class='form-label'>Hostname</label>
+                    <div class='input-group'>
+                        <input type='text' id='hostname-field' class='form-input' value='{hostname}' readonly>
+                        <button onclick='copyField(""hostname-field"")' class='btn-icon' title='Copy'>📋</button>
+                    </div>
+                </div>
+                
+                <div class='form-group'>
+                    <label class='form-label'>Username</label>
+                    <div class='input-group'>
+                        <input type='text' id='username-field' class='form-input' value='{hostname.Split('.')[0]}' readonly>
+                        <button onclick='copyField(""username-field"")' class='btn-icon' title='Copy'>📋</button>
+                    </div>
+                </div>
+                
+                <div class='form-group'>
+                    <label class='form-label'>Password (API Key)</label>
+                    <div class='input-group'>
+                        <input type='password' id='password-field' class='form-input' value='{exampleKey}' readonly>
+                        <button onclick='(() => {{ const f = document.getElementById(""password-field""); f.type = f.type === ""password"" ? ""text"" : ""password""; }})()' class='btn-icon' title='Show/Hide'>👁️</button>
+                        <button onclick='copyField(""password-field"")' class='btn-icon' title='Copy'>📋</button>
+                    </div>
+                </div>
+                
+                <div class='form-group'>
+                    <label class='form-label'>Server/Update URL</label>
+                    <div class='input-group'>
+                        <input type='text' id='server-field' class='form-input' value='{req.Url.Host}/api/nic/update' readonly>
+                        <button onclick='copyField(""server-field"")' class='btn-icon' title='Copy'>📋</button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class='config-form'>
+                <h3 style='margin-bottom: 20px; color: #2d3748;'>Command Line Examples</h3>
+                
+                <div class='form-group'>
+                    <label class='form-label'>curl</label>
+                    <div class='command-box'>curl -u ""{hostname.Split('.')[0]}:{exampleKey}"" ""https://{req.Url.Host}/api/nic/update?hostname={hostname}&myip=auto""</div>
+                </div>
+                
+                <div class='form-group'>
+                    <label class='form-label'>wget</label>
+                    <div class='command-box'>wget --auth-no-challenge --user=""{hostname.Split('.')[0]}"" --password=""{exampleKey}"" ""https://{req.Url.Host}/api/nic/update?hostname={hostname}&myip=auto""</div>
+                </div>
+            </div>
+        </div>
+        
+        {historyHtml}
+        
+        <footer>
+            <a href='/.auth/logout'>Sign out</a> | 
+            Azure DDNS Service | 
+            <a href='https://github.com/yourusername/azure-ddns'>Documentation</a>
+        </footer>
+    </div>
+</body>
+</html>";
+            
+            await response.WriteStringAsync(html);
+            return response;
         }
     }
 }

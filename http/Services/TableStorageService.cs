@@ -129,21 +129,23 @@ namespace Company.Function.Services
         }
 
         // API Key Operations
-        public async Task<bool> StoreApiKeyMappingAsync(string apiKeyHash, string hostname, string ownerPrincipalId)
+        public async Task<bool> StoreApiKeyMappingAsync(string apiKeyHash, string hostname, string ownerPrincipalId, string? ownerEmail = null)
         {
             var createdAt = DateTimeOffset.UtcNow;
             var expiresAt = createdAt.AddYears(1);
             
-            _logger.LogInformation($"[AUDIT-API-KEY] Creating API key mapping for hostname '{hostname}' owned by '{ownerPrincipalId}', expires {expiresAt:yyyy-MM-dd}");
+            _logger.LogInformation($"[AUDIT-API-KEY] Creating API key mapping for hostname '{hostname}' owned by '{ownerPrincipalId}' ({ownerEmail}), expires {expiresAt:yyyy-MM-dd}");
             
             try
             {
                 var entity = new TableEntity(apiKeyHash, hostname)
                 {
                     ["OwnerPrincipalId"] = ownerPrincipalId,
+                    ["CreatedByEmail"] = ownerEmail ?? "Unknown",
                     ["CreatedAt"] = createdAt,
                     ["ExpiresAt"] = expiresAt,
                     ["IsActive"] = true,
+                    ["UseCount"] = 0,
                     ["CreatedByIP"] = Environment.GetEnvironmentVariable("WEBSITE_INSTANCE_ID") ?? "local"
                 };
                 
@@ -222,6 +224,30 @@ namespace Company.Function.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"Failed to get API keys for owner {ownerPrincipalId}");
+            }
+            
+            return keys;
+        }
+
+        public async Task<List<TableEntity>> GetApiKeysForHostnameAsync(string hostname)
+        {
+            var keys = new List<TableEntity>();
+            
+            try
+            {
+                var response = _apiKeysTable.QueryAsync<TableEntity>(
+                    filter: $"RowKey eq '{hostname}'");
+                
+                await foreach (var entity in response)
+                {
+                    keys.Add(entity);
+                }
+                
+                _logger.LogInformation($"[AUDIT-API-KEYS] Found {keys.Count} API keys for hostname '{hostname}'");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"[AUDIT-API-KEYS-ERROR] Failed to get API keys for hostname {hostname}");
             }
             
             return keys;

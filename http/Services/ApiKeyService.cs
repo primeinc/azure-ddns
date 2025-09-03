@@ -39,9 +39,9 @@ namespace Company.Function.Services
             }
         }
 
-        public async Task<string> GenerateApiKeyAsync(string hostname, string ownerPrincipalId)
+        public async Task<string> GenerateApiKeyAsync(string hostname, string ownerPrincipalId, string? ownerEmail = null)
         {
-            _logger.LogInformation($"[AUDIT-KEYGEN] Starting API key generation for hostname '{hostname}' requested by '{ownerPrincipalId}'");
+            _logger.LogInformation($"[AUDIT-KEYGEN] Starting API key generation for hostname '{hostname}' requested by '{ownerPrincipalId}' ({ownerEmail})'");
             
             try
             {
@@ -66,7 +66,7 @@ namespace Company.Function.Services
                 }
                 
                 // Store the mapping in Table Storage (with hash, not the actual key)
-                var stored = await _tableStorage.StoreApiKeyMappingAsync(apiKeyHash, hostname, ownerPrincipalId);
+                var stored = await _tableStorage.StoreApiKeyMappingAsync(apiKeyHash, hostname, ownerPrincipalId, ownerEmail);
                 
                 if (stored)
                 {
