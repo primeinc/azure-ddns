@@ -144,10 +144,52 @@ module api './app/api.bicep' = {
       DNS_RESOURCE_GROUP: dnsResourceGroupName
       DNS_ZONE_NAME: dnsZoneName
       DDNS_SUBDOMAIN: 'ddns'
-      DDNS_USERNAME: 'admin' // TODO: Move to Key Vault
-      DDNS_PASSWORD: 'password' // TODO: Move to Key Vault
+      DDNS_USERNAME: '@Microsoft.KeyVault(VaultName=${keyVault.outputs.name};SecretName=ddns-username)'
+      DDNS_PASSWORD: '@Microsoft.KeyVault(VaultName=${keyVault.outputs.name};SecretName=ddns-password)'
+      KEY_VAULT_URI: keyVault.outputs.uri
+      AZURE_AD_TENANT_ID: azureAdTenantId
+      AZURE_AD_CLIENT_ID: azureAdClientId
+      AZURE_AD_REDIRECT_URI: 'https://${functionAppName}.azurewebsites.net/.auth/login/aad/callback'
+      AZURE_STORAGE_ACCOUNT_NAME: storage.outputs.name
     }
     virtualNetworkSubnetId: vnetEnabled ? serviceVirtualNetwork.outputs.appSubnetID : ''
+  }
+}
+
+// Key Vault for storing secrets and API keys
+module keyVault 'br/public:avm/res/key-vault/vault:0.9.0' = {
+  name: 'keyvault'
+  scope: rg
+  params: {
+    name: take('kv${resourceToken}', 24) // Key Vault names limited to 24 chars
+    location: location
+    tags: tags
+    enableRbacAuthorization: true
+    enablePurgeProtection: false // Set to true for production
+    softDeleteRetentionInDays: 7
+    sku: 'standard'
+    secrets: [
+      {
+        name: 'ddns-username'
+        value: 'admin' // TODO: Update via deployment parameter
+      }
+      {
+        name: 'ddns-password'
+        value: 'password' // TODO: Update via deployment parameter  
+      }
+    ]
+    roleAssignments: [
+      {
+        principalId: apiUserAssignedIdentity.outputs.principalId
+        roleDefinitionIdOrName: '4633458b-17de-408a-b874-0445c86b69e6' // Key Vault Secrets User
+        principalType: 'ServicePrincipal'
+      }
+      {
+        principalId: principalId
+        roleDefinitionIdOrName: '00482a5a-887f-4fb3-b363-3b7fe8e74483' // Key Vault Administrator
+        principalType: 'User'
+      }
+    ]
   }
 }
 
@@ -181,7 +223,7 @@ module storage 'br/public:avm/res/storage/storage-account:0.8.3' = {
 var storageEndpointConfig = {
   enableBlob: true  // Required for AzureWebJobsStorage, .zip deployment, Event Hubs trigger and Timer trigger checkpointing
   enableQueue: false  // Required for Durable Functions and MCP trigger
-  enableTable: false  // Required for Durable Functions and OpenAI triggers and bindings
+  enableTable: true  // Required for API key and hostname ownership storage
   enableFiles: false   // Not required, used in legacy scenarios
   allowUserIdentityPrincipal: true   // Allow interactive user identity to access for testing and debugging
 }
@@ -272,3 +314,6 @@ output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
 output SERVICE_API_NAME string = api.outputs.SERVICE_API_NAME
 output AZURE_FUNCTION_NAME string = api.outputs.SERVICE_API_NAME
+output KEY_VAULT_NAME string = keyVault.outputs.name
+output KEY_VAULT_URI string = keyVault.outputs.uri
+output STORAGE_ACCOUNT_NAME string = storage.outputs.name

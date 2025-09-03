@@ -12,17 +12,22 @@ using Azure.Identity;
 using Azure.ResourceManager;
 using Azure.ResourceManager.Dns;
 using Azure.ResourceManager.Dns.Models;
+using Company.Function.Services;
 
 namespace Company.Function
 {
     public class DdnsUpdateFunction
     {
         private readonly ILogger<DdnsUpdateFunction> _logger;
+        private readonly ApiKeyService _apiKeyService;
+        private readonly TableStorageService _tableStorage;
         private static int _invocationCount = 0;
 
-        public DdnsUpdateFunction(ILogger<DdnsUpdateFunction> logger)
+        public DdnsUpdateFunction(ILogger<DdnsUpdateFunction> logger, ApiKeyService apiKeyService, TableStorageService tableStorage)
         {
             _logger = logger;
+            _apiKeyService = apiKeyService;
+            _tableStorage = tableStorage;
             _logger.LogInformation("====== DdnsUpdateFunction CONSTRUCTOR called ======");
         }
 
@@ -46,6 +51,8 @@ namespace Company.Function
                 
                 string? username = null;
                 string? password = null;
+                bool isApiKeyAuth = false;
+                string? authenticatedHostname = null;
                 
                 if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Basic "))
                 {
@@ -63,6 +70,19 @@ namespace Company.Function
                         }
                         
                         _logger.LogInformation($"[{invocationId}] Basic Auth decoded - Username: {username}");
+                        
+                        // Try API key authentication first
+                        var apiKey = await _apiKeyService.GetApiKeyFromBasicAuth(authHeader);
+                        if (!string.IsNullOrEmpty(apiKey))
+                        {
+                            var (isValid, validatedHostname) = await _apiKeyService.ValidateApiKeyAsync(apiKey);
+                            if (isValid && !string.IsNullOrEmpty(validatedHostname))
+                            {
+                                isApiKeyAuth = true;
+                                authenticatedHostname = validatedHostname;
+                                _logger.LogInformation($"[{invocationId}] API key authenticated for hostname: {validatedHostname}");
+                            }
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -101,9 +121,9 @@ namespace Company.Function
                     foreach (var header in req.Headers)
                     {
                         var headerValues = req.Headers[header.Key];
-                        if (headerValues.Any())
+                        if (headerValues.Count > 0)
                         {
-                            var values = string.Join(", ", headerValues);
+                            var values = string.Join(", ", headerValues.ToArray());
                             _logger.LogInformation($"[{invocationId}]   {header.Key}: {values}");
                         }
                     }
@@ -193,14 +213,38 @@ namespace Company.Function
                     return CreateDynDnsResponse("911", invocationId);
                 }
                 
-                // TODO: Validate API key against hostname ownership
-                // For now, we'll use environment variables for basic auth
-                var expectedUsername = Environment.GetEnvironmentVariable("DDNS_USERNAME") ?? "admin";
-                var expectedPassword = Environment.GetEnvironmentVariable("DDNS_PASSWORD") ?? "password";
+                // Validate authentication - either API key or legacy basic auth
+                bool isAuthenticated = false;
                 
-                if (username != expectedUsername || password != expectedPassword)
+                if (isApiKeyAuth && !string.IsNullOrEmpty(authenticatedHostname))
                 {
-                    _logger.LogWarning($"[{invocationId}] Invalid credentials for user: {username}");
+                    // API key authentication successful
+                    // Verify that the authenticated hostname matches the requested hostname
+                    if (!hostname.Equals(authenticatedHostname, StringComparison.OrdinalIgnoreCase) && 
+                        !hostname.StartsWith($"{authenticatedHostname}.", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogWarning($"[{invocationId}] API key hostname mismatch - authenticated: {authenticatedHostname}, requested: {hostname}");
+                        return CreateDynDnsResponse("nohost", invocationId);
+                    }
+                    isAuthenticated = true;
+                    _logger.LogInformation($"[{invocationId}] Authenticated via API key for hostname: {authenticatedHostname}");
+                }
+                else
+                {
+                    // Fall back to legacy basic auth
+                    var expectedUsername = Environment.GetEnvironmentVariable("DDNS_USERNAME") ?? "admin";
+                    var expectedPassword = Environment.GetEnvironmentVariable("DDNS_PASSWORD") ?? "password";
+                    
+                    if (username == expectedUsername && password == expectedPassword)
+                    {
+                        isAuthenticated = true;
+                        _logger.LogInformation($"[{invocationId}] Authenticated via legacy basic auth");
+                    }
+                }
+                
+                if (!isAuthenticated)
+                {
+                    _logger.LogWarning($"[{invocationId}] Authentication failed for user: {username}");
                     return CreateDynDnsResponse("badauth", invocationId);
                 }
                 
@@ -275,7 +319,12 @@ namespace Company.Function
                 
                 var updateResult = await UpdateDnsRecord(invocationId, dnsZoneName, recordName, myip);
                 
+                // Log update to Table Storage
+                bool updateSuccess = updateResult == "good" || updateResult == "nochg";
+                await _tableStorage.LogUpdateAsync(hostname, myip, updateSuccess, updateResult);
+                
                 _logger.LogInformation($"[{invocationId}] DNS update result: {updateResult}");
+                _logger.LogInformation($"[{invocationId}] Update logged to Table Storage");
                 _logger.LogInformation($"[{invocationId}] DDNS UPDATE FUNCTION COMPLETED");
                 _logger.LogInformation("====================================================");
                 
