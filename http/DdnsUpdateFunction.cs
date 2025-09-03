@@ -81,28 +81,76 @@ namespace Company.Function
                 // Auto-detect IP if myip is not provided or is "auto"
                 if (string.IsNullOrEmpty(myip) || myip.Equals("auto", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Try to get real client IP
-                    var clientIp = req.HttpContext.Connection.RemoteIpAddress?.ToString();
-                    var forwardedFor = req.Headers["X-Forwarded-For"].FirstOrDefault();
-                    var originalFor = req.Headers["X-Original-For"].FirstOrDefault();
+                    _logger.LogInformation($"[{invocationId}] ====== IP AUTO-DETECTION START ======");
                     
-                    _logger.LogInformation($"[{invocationId}] Auto-detecting IP:");
-                    _logger.LogInformation($"[{invocationId}]   RemoteIpAddress = {clientIp ?? "null"}");
-                    _logger.LogInformation($"[{invocationId}]   X-Forwarded-For = {forwardedFor ?? "null"}");
-                    _logger.LogInformation($"[{invocationId}]   X-Original-For = {originalFor ?? "null"}");
-                    
-                    // Use X-Forwarded-For first, then X-Original-For, then RemoteIpAddress
-                    myip = forwardedFor?.Split(',')[0].Trim() ?? 
-                           originalFor?.Split(',')[0].Trim() ?? 
-                           clientIp;
-                    
-                    // Remove port if present
-                    if (!string.IsNullOrEmpty(myip) && myip.Contains(':'))
+                    // Log ALL headers for debugging
+                    _logger.LogInformation($"[{invocationId}] All request headers:");
+                    foreach (var header in req.Headers)
                     {
-                        myip = myip.Substring(0, myip.LastIndexOf(':'));
+                        var headerValues = req.Headers[header.Key];
+                        if (headerValues.Any())
+                        {
+                            var values = string.Join(", ", headerValues);
+                            _logger.LogInformation($"[{invocationId}]   {header.Key}: {values}");
+                        }
                     }
-                    
-                    _logger.LogInformation($"[{invocationId}]   Detected IP = {myip ?? "failed to detect"}");
+
+                    // Try to get real client IP from various sources
+                    var forwardedFor = req.Headers["X-Forwarded-For"].FirstOrDefault();
+                    var azureClientIp = req.Headers["X-Azure-ClientIP"].FirstOrDefault();
+                    var realIp = req.Headers["X-Real-IP"].FirstOrDefault();
+                    var originalFor = req.Headers["X-Original-For"].FirstOrDefault();
+                    var clientIp = req.HttpContext?.Connection?.RemoteIpAddress?.ToString();
+
+                    _logger.LogInformation($"[{invocationId}] Header values after middleware fix:");
+                    _logger.LogInformation($"[{invocationId}]   X-Forwarded-For = {forwardedFor ?? "null"}");
+                    _logger.LogInformation($"[{invocationId}]   X-Azure-ClientIP = {azureClientIp ?? "null"}");
+                    _logger.LogInformation($"[{invocationId}]   X-Real-IP = {realIp ?? "null"}");
+                    _logger.LogInformation($"[{invocationId}]   X-Original-For = {originalFor ?? "null"}");
+                    _logger.LogInformation($"[{invocationId}]   HttpContext.RemoteIpAddress = {clientIp ?? "null"}");
+
+                    // Try headers in order of preference (Azure-specific first)
+                    myip = azureClientIp?.Trim() ??
+                           forwardedFor?.Split(',')[0].Trim() ??
+                           realIp?.Trim() ??
+                           originalFor?.Split(',')[0].Trim() ??
+                           clientIp;
+
+                    // Clean up the IP address
+                    if (!string.IsNullOrEmpty(myip))
+                    {
+                        _logger.LogInformation($"[{invocationId}] Raw IP before cleanup: {myip}");
+                        
+                        // Remove IPv6 brackets and port if present: [::1]:41380 -> ::1
+                        if (myip.StartsWith("[") && myip.Contains("]:"))
+                        {
+                            var endBracket = myip.IndexOf("]:");
+                            myip = myip.Substring(1, endBracket - 1);
+                        }
+                        // Remove brackets from IPv6: [::1] -> ::1
+                        else if (myip.StartsWith("[") && myip.EndsWith("]"))
+                        {
+                            myip = myip.Substring(1, myip.Length - 2);
+                        }
+                        // Remove port from IPv4: 1.2.3.4:80 -> 1.2.3.4
+                        else if (myip.Contains(':') && myip.Split('.').Length == 4)
+                        {
+                            myip = myip.Substring(0, myip.LastIndexOf(':'));
+                        }
+
+                        _logger.LogInformation($"[{invocationId}] IP after cleanup: {myip}");
+
+                        // Reject loopback and private addresses
+                        if (myip == "::1" || myip == "127.0.0.1" || myip.StartsWith("127.") || 
+                            myip == "localhost" || myip.StartsWith("10.") || myip.StartsWith("192.168.") ||
+                            (myip.StartsWith("172.") && int.Parse(myip.Split('.')[1]) >= 16 && int.Parse(myip.Split('.')[1]) <= 31))
+                        {
+                            _logger.LogWarning($"[{invocationId}] Detected private/loopback address: {myip}, cannot use for DDNS");
+                            myip = null;
+                        }
+                    }
+
+                    _logger.LogInformation($"[{invocationId}] ====== IP AUTO-DETECTION RESULT: {myip ?? "FAILED"} ======");
                 }
                 
                 // Validate required parameters
@@ -120,7 +168,8 @@ namespace Company.Function
                 
                 if (string.IsNullOrEmpty(myip))
                 {
-                    _logger.LogWarning($"[{invocationId}] Failed to determine IP address");
+                    _logger.LogWarning($"[{invocationId}] Failed to determine IP address - auto-detection found only loopback or no valid IP");
+                    _logger.LogWarning($"[{invocationId}] Please specify IP explicitly with myip parameter instead of using 'auto'");
                     return CreateDynDnsResponse("911", invocationId);
                 }
                 
@@ -146,26 +195,72 @@ namespace Company.Function
                 var dnsZoneName = Environment.GetEnvironmentVariable("DNS_ZONE_NAME") ?? "title.dev";
                 var ddnsSubdomain = Environment.GetEnvironmentVariable("DDNS_SUBDOMAIN") ?? "ddns";
                 
-                // Expected format: device.ddns.title.dev
-                if (!hostname.EndsWith($".{ddnsSubdomain}.{dnsZoneName}"))
+                // Support multiple patterns:
+                // 1. *.ddns.title.dev (e.g., wan1-mro-tru.ddns.title.dev)
+                // 2. *.*.ddns.title.dev (e.g., wan1.mro.tru.ddns.title.dev)
+                // 3. *.*.*.ddns.title.dev (e.g., wan1.stg.tru.ddns.title.dev)
+                // 4. Direct under zone (e.g., wan1.ftl.cts.title.dev)
+                
+                string recordName = string.Empty;
+                bool isValidHostname = false;
+                
+                // Check if it ends with .ddns.title.dev pattern
+                var ddnsPattern = $".{ddnsSubdomain}.{dnsZoneName}";
+                if (hostname.EndsWith(ddnsPattern))
+                {
+                    // Extract everything before .ddns.title.dev
+                    var prefix = hostname.Substring(0, hostname.Length - ddnsPattern.Length);
+                    if (!string.IsNullOrEmpty(prefix))
+                    {
+                        // Record name in DNS is prefix.ddns (e.g., wan1.mro.tru.ddns)
+                        recordName = $"{prefix}.{ddnsSubdomain}";
+                        isValidHostname = true;
+                        _logger.LogInformation($"[{invocationId}] DDNS pattern matched: {prefix} under {ddnsSubdomain}.{dnsZoneName}");
+                    }
+                }
+                // Check if it's directly under the zone (e.g., wan1.ftl.cts.title.dev)
+                else if (hostname.EndsWith($".{dnsZoneName}"))
+                {
+                    // Extract everything before .title.dev
+                    var prefix = hostname.Substring(0, hostname.Length - $".{dnsZoneName}".Length);
+                    if (!string.IsNullOrEmpty(prefix))
+                    {
+                        // Record name in DNS is just the prefix (e.g., wan1.ftl.cts)
+                        recordName = prefix;
+                        isValidHostname = true;
+                        _logger.LogInformation($"[{invocationId}] Direct zone pattern matched: {prefix} under {dnsZoneName}");
+                    }
+                }
+                else
                 {
                     _logger.LogWarning($"[{invocationId}] Invalid hostname format: {hostname}");
-                    _logger.LogWarning($"[{invocationId}] Expected: *.{ddnsSubdomain}.{dnsZoneName}");
+                    _logger.LogWarning($"[{invocationId}] Expected: *.{ddnsSubdomain}.{dnsZoneName} or *.{dnsZoneName}");
                     return CreateDynDnsResponse("nohost", invocationId);
                 }
                 
-                // Extract the device name (first part of hostname)
-                var deviceName = hostname.Replace($".{ddnsSubdomain}.{dnsZoneName}", "");
-                _logger.LogInformation($"[{invocationId}] Device name extracted: {deviceName}");
+                if (!isValidHostname)
+                {
+                    _logger.LogWarning($"[{invocationId}] Empty or invalid prefix in hostname: {hostname}");
+                    return CreateDynDnsResponse("nohost", invocationId);
+                }
+                
+                // Validate DNS name (alphanumeric, dots, and hyphens only)
+                if (!System.Text.RegularExpressions.Regex.IsMatch(recordName, @"^[a-zA-Z0-9\.\-]+$"))
+                {
+                    _logger.LogWarning($"[{invocationId}] Invalid characters in DNS record name: {recordName}");
+                    return CreateDynDnsResponse("nohost", invocationId);
+                }
+                
+                _logger.LogInformation($"[{invocationId}] DNS record name to update: {recordName}");
                 
                 // Update DNS record
                 _logger.LogInformation($"[{invocationId}] Attempting DNS update:");
                 _logger.LogInformation($"[{invocationId}]   Zone: {dnsZoneName}");
-                _logger.LogInformation($"[{invocationId}]   Record: {deviceName}.{ddnsSubdomain}");
+                _logger.LogInformation($"[{invocationId}]   Record: {recordName}");
                 _logger.LogInformation($"[{invocationId}]   Type: A");
                 _logger.LogInformation($"[{invocationId}]   IP: {myip}");
                 
-                var updateResult = await UpdateDnsRecord(invocationId, dnsZoneName, $"{deviceName}.{ddnsSubdomain}", myip);
+                var updateResult = await UpdateDnsRecord(invocationId, dnsZoneName, recordName, myip);
                 
                 _logger.LogInformation($"[{invocationId}] DNS update result: {updateResult}");
                 _logger.LogInformation($"[{invocationId}] DDNS UPDATE FUNCTION COMPLETED");
@@ -205,11 +300,24 @@ namespace Company.Function
                 _logger.LogInformation($"[{invocationId}] Target subscription: {subscriptionId}");
                 _logger.LogInformation($"[{invocationId}] Target resource group: {resourceGroupName}");
                 
-                // Use managed identity with explicit client ID for user-assigned identity
+                // Use DefaultAzureCredential with ManagedIdentityClientId for user-assigned identity
                 var clientId = Environment.GetEnvironmentVariable("AZURE_CLIENT_ID");
-                TokenCredential credential = !string.IsNullOrEmpty(clientId) 
-                    ? new ManagedIdentityCredential(clientId) 
-                    : new DefaultAzureCredential();
+                _logger.LogInformation($"[{invocationId}] AZURE_CLIENT_ID from environment: {clientId ?? "not set"}");
+                
+                TokenCredential credential;
+                if (!string.IsNullOrEmpty(clientId))
+                {
+                    _logger.LogInformation($"[{invocationId}] Using DefaultAzureCredential with ManagedIdentityClientId: {clientId}");
+                    credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
+                    {
+                        ManagedIdentityClientId = clientId
+                    });
+                }
+                else
+                {
+                    _logger.LogInformation($"[{invocationId}] Using DefaultAzureCredential without specific client ID");
+                    credential = new DefaultAzureCredential();
+                }
                 var armClient = new ArmClient(credential);
                 
                 // Get the DNS zone

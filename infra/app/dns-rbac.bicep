@@ -24,3 +24,4 @@ module dnsRoleAssignment 'dns-role-assignment.bicep' = {
 
 output roleAssignmentId string = dnsRoleAssignment.outputs.roleAssignmentId
 output roleAssignmentName string = dnsRoleAssignment.outputs.roleAssignmentName
+output readerRoleAssignmentId string = dnsRoleAssignment.outputs.readerRoleAssignmentId

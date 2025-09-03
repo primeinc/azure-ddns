@@ -9,7 +9,11 @@ Console.WriteLine($"Start Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} UTC");
 Console.WriteLine($"Environment: {Environment.GetEnvironmentVariable("AZURE_FUNCTIONS_ENVIRONMENT") ?? "Development"}");
 
 var host = new HostBuilder()
-    .ConfigureFunctionsWebApplication()
+    .ConfigureFunctionsWebApplication(app =>
+    {
+        // Add custom middleware to fix header handling in .NET 8 Isolated Worker
+        app.UseMiddleware<Company.Function.ForwardedForHeaderMiddleware>();
+    })
     .ConfigureServices(services =>
     {
         services.AddApplicationInsightsTelemetryWorkerService();

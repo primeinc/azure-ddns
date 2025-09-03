@@ -120,6 +120,8 @@ module appServicePlan 'br/public:avm/res/web/serverfarm:0.1.1' = {
 module api './app/api.bicep' = {
   name: 'api'
   scope: rg
+  // Ensure DNS RBAC is configured before function starts (if DNS parameters provided)
+  dependsOn: !empty(dnsSubscriptionId) && !empty(dnsZoneName) ? [dnsRbac] : []
   params: {
     name: functionAppName
     location: location
@@ -251,6 +253,8 @@ module monitoring 'br/public:avm/res/insights/component:0.6.0' = {
 }
 
 // DNS RBAC Configuration for cross-subscription access
+// Assigns both Reader (on resource group) and DNS Zone Contributor (on DNS zone) roles
+// Both roles are required: Reader to access the resource group, DNS Zone Contributor to modify DNS records
 // Only deploy if DNS configuration parameters are provided
 module dnsRbac './app/dns-rbac.bicep' = if (!empty(dnsSubscriptionId) && !empty(dnsZoneName)) {
   name: '${uniqueString(deployment().name, location)}-dnsrbac'

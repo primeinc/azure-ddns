@@ -154,10 +154,19 @@ The system expects DNS zones to be hosted in Azure DNS:
   - Each user can claim multiple hostnames under the DDNS subdomain
 
 ### DNS Zone Requirements
-- DNS Zone must exist in Azure subscription
-- Function app's managed identity needs DNS Zone Contributor role
+- DNS Zone must exist in Azure subscription (can be different from function app subscription)
+- Function app's managed identity requires TWO roles:
+  - **Reader** role on the DNS resource group (for cross-subscription resource group access)
+  - **DNS Zone Contributor** role on the DNS zone itself (for modifying DNS records)
 - Support for wildcard subdomain delegation (e.g., `*.ddns.example.com`)
 - Automatic TTL management (60 seconds for dynamic records)
+
+### Cross-Subscription Deployment Requirements
+- **Deploying user** must have Owner or User Access Administrator role in BOTH:
+  - Function app subscription (to create resources)
+  - DNS zone subscription (to assign roles to managed identity)
+- Role assignments may take up to 10 minutes to propagate after deployment
+- If deployment fails with permission errors, verify you have role assignment permissions in the DNS subscription
 
 ## Environment Variables Required
 
