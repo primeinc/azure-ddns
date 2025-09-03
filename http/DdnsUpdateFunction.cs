@@ -78,8 +78,21 @@ namespace Company.Function
                 _logger.LogInformation($"[{invocationId}]   hostname = {hostname ?? "null"}");
                 _logger.LogInformation($"[{invocationId}]   myip = {myip ?? "null"}");
                 
-                // Auto-detect IP if myip is not provided or is "auto"
-                if (string.IsNullOrEmpty(myip) || myip.Equals("auto", StringComparison.OrdinalIgnoreCase))
+                // Check if provided IP is private/internal - if so, treat as "auto"
+                bool needAutoDetect = string.IsNullOrEmpty(myip) || 
+                                      myip.Equals("auto", StringComparison.OrdinalIgnoreCase) ||
+                                      IsPrivateOrInternalIP(myip);
+                
+                if (needAutoDetect)
+                {
+                    if (!string.IsNullOrEmpty(myip) && IsPrivateOrInternalIP(myip))
+                    {
+                        _logger.LogWarning($"[{invocationId}] Provided IP {myip} is private/internal, switching to auto-detection");
+                    }
+                }
+                
+                // Auto-detect IP if myip is not provided, is "auto", or is a private IP
+                if (needAutoDetect)
                 {
                     _logger.LogInformation($"[{invocationId}] ====== IP AUTO-DETECTION START ======");
                     
@@ -397,6 +410,43 @@ namespace Company.Function
                 ContentType = "text/plain",
                 StatusCode = response == "badauth" ? 401 : 200
             };
+        }
+        
+        private bool IsPrivateOrInternalIP(string ipAddress)
+        {
+            if (!IPAddress.TryParse(ipAddress, out var ip))
+                return false;
+                
+            // Check for loopback
+            if (IPAddress.IsLoopback(ip))
+                return true;
+                
+            // Check for IPv4 private ranges
+            var bytes = ip.GetAddressBytes();
+            if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+            {
+                // 10.0.0.0/8
+                if (bytes[0] == 10)
+                    return true;
+                    
+                // 172.16.0.0/12
+                if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
+                    return true;
+                    
+                // 192.168.0.0/16
+                if (bytes[0] == 192 && bytes[1] == 168)
+                    return true;
+                    
+                // 127.0.0.0/8 (loopback)
+                if (bytes[0] == 127)
+                    return true;
+                    
+                // 169.254.0.0/16 (link-local)
+                if (bytes[0] == 169 && bytes[1] == 254)
+                    return true;
+            }
+            
+            return false;
         }
     }
 }
