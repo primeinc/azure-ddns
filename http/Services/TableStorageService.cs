@@ -83,6 +83,8 @@ namespace Company.Function.Services
                 if (!response.IsError)
                 {
                     _logger.LogInformation($"[AUDIT-SUCCESS] Hostname '{hostname}' successfully claimed by '{ownerPrincipalId}' ({ownerEmail})");
+                    
+                    
                     return true;
                 }
                 
@@ -151,6 +153,8 @@ namespace Company.Function.Services
                 
                 await _apiKeysTable.UpsertEntityAsync(entity);
                 _logger.LogInformation($"[AUDIT-API-KEY-SUCCESS] API key created for '{hostname}' with hash '{apiKeyHash.Substring(0, 8)}...'");
+                
+                
                 return true;
             }
             catch (Exception ex)
@@ -166,15 +170,24 @@ namespace Company.Function.Services
             
             try
             {
-                var response = await _apiKeysTable.GetEntityAsync<TableEntity>(apiKeyHash, apiKeyHash);
+                // Query for the API key by PartitionKey (which is the hash)
+                var response = _apiKeysTable.QueryAsync<TableEntity>(
+                    filter: $"PartitionKey eq '{apiKeyHash}'",
+                    maxPerPage: 1);
                 
-                if (response.Value == null)
+                TableEntity? entity = null;
+                await foreach (var item in response)
+                {
+                    entity = item;
+                    break;
+                }
+                
+                if (entity == null)
                 {
                     _logger.LogWarning($"[AUDIT-AUTH-FAIL] API key not found: '{apiKeyHash.Substring(0, 8)}...'");
                     return (null, false);
                 }
                 
-                var entity = response.Value;
                 var hostname = entity.RowKey;
                 var isActive = entity.GetBoolean("IsActive") ?? false;
                 var expiresAt = entity.GetDateTimeOffset("ExpiresAt") ?? DateTimeOffset.MinValue;
@@ -194,11 +207,6 @@ namespace Company.Function.Services
                 
                 _logger.LogInformation($"[AUDIT-AUTH-SUCCESS] API key validated for '{hostname}' (owner: '{owner}', expires: {expiresAt:yyyy-MM-dd})");
                 return (hostname, true);
-            }
-            catch (Azure.RequestFailedException ex) when (ex.Status == 404)
-            {
-                _logger.LogWarning($"[AUDIT-AUTH-NOT-FOUND] API key does not exist: '{apiKeyHash.Substring(0, 8)}...'");
-                return (null, false);
             }
             catch (Exception ex)
             {
@@ -253,6 +261,52 @@ namespace Company.Function.Services
             return keys;
         }
 
+        public async Task<bool> RevokeApiKeyAsync(string apiKeyHash)
+        {
+            _logger.LogInformation($"[AUDIT-REVOKE] Revoking API key with hash '{apiKeyHash.Substring(0, Math.Min(8, apiKeyHash.Length))}...'");
+            
+            try
+            {
+                // Get the entity first to find the hostname (RowKey)
+                var response = _apiKeysTable.QueryAsync<TableEntity>(
+                    filter: $"PartitionKey eq '{apiKeyHash}'",
+                    maxPerPage: 1);
+                
+                TableEntity? entityToRevoke = null;
+                await foreach (var entity in response)
+                {
+                    entityToRevoke = entity;
+                    break;
+                }
+                
+                if (entityToRevoke == null)
+                {
+                    _logger.LogWarning($"[AUDIT-REVOKE-NOT-FOUND] API key not found: '{apiKeyHash.Substring(0, Math.Min(8, apiKeyHash.Length))}...'");
+                    return false;
+                }
+                
+                var hostname = entityToRevoke.RowKey;
+                var owner = entityToRevoke.GetString("OwnerPrincipalId") ?? "unknown";
+                
+                // Mark as inactive instead of deleting (preserve audit trail)
+                entityToRevoke["IsActive"] = false;
+                entityToRevoke["RevokedAt"] = DateTimeOffset.UtcNow;
+                entityToRevoke["LastModified"] = DateTimeOffset.UtcNow;
+                
+                await _apiKeysTable.UpdateEntityAsync(entityToRevoke, entityToRevoke.ETag);
+                
+                _logger.LogInformation($"[AUDIT-REVOKE-SUCCESS] API key revoked for hostname '{hostname}' (owner: '{owner}')");
+                
+                
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"[AUDIT-REVOKE-ERROR] Failed to revoke API key '{apiKeyHash.Substring(0, Math.Min(8, apiKeyHash.Length))}...'");
+                return false;
+            }
+        }
+
         // Update History Operations
         public async Task LogUpdateAsync(string hostname, string ipAddress, bool success, string? message = null)
         {
@@ -304,5 +358,6 @@ namespace Company.Function.Services
             
             return history;
         }
+
     }
 }

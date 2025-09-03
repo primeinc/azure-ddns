@@ -183,8 +183,8 @@ namespace Company.Function
                 var apiKeys = await _tableStorage.GetApiKeysForHostnameAsync(hostname);
                 _logger.LogInformation($"[AUDIT-MANAGE] Found {apiKeys.Count} API keys for hostname {hostname}");
                 
-                // Get recent update history
-                var updateHistory = await _tableStorage.GetUpdateHistoryAsync(hostname, 10);
+                // Get update history
+                var updateHistory = await _tableStorage.GetUpdateHistoryAsync(hostname, 50);
                 
                 // Get the user's email from the header if not in claims
                 if (string.IsNullOrEmpty(userEmail))
@@ -193,6 +193,7 @@ namespace Company.Function
                     userEmail = nameVals?.FirstOrDefault() ?? "Unknown";
                     _logger.LogInformation($"[AUDIT-MANAGE] Got email from X-MS-CLIENT-PRINCIPAL-NAME: {userEmail}");
                 }
+                
                 
                 // Return management page
                 _logger.LogInformation($"[AUDIT-MANAGE] Returning management page for owner {userId} of hostname {hostname}");
@@ -317,12 +318,8 @@ namespace Company.Function
             var response = req.CreateResponse(System.Net.HttpStatusCode.OK);
             response.Headers.Add("Content-Type", "text/html; charset=utf-8");
 
-            // Get the most recent active API key for examples (if any)
-            var latestKey = apiKeys?
-                .Where(k => k.GetBoolean("IsActive") ?? false)
-                .OrderByDescending(k => k.GetDateTimeOffset("CreatedAt"))
-                .FirstOrDefault();
-            var exampleKey = latestKey?.PartitionKey ?? "YOUR_API_KEY_HERE";
+            // Note: We only store hashes, not actual keys - for security
+            // Users must save their API key when it's generated as we can't show it again
 
             // Build API keys table with management buttons
             var apiKeysHtml = "";
@@ -343,12 +340,11 @@ namespace Company.Function
                         : "<span class='badge badge-danger'>Revoked</span>";
                     var lastUsedStr = lastUsed?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Never";
                     
-                    // Full key display with copy button
+                    // Display key hash (we don't store actual keys for security)
                     var keyDisplay = $@"
                         <div class='key-display'>
-                            <input type='password' id='key-{index}' value='{keyId}' readonly class='key-input'>
-                            <button onclick='toggleKey({index})' class='btn-icon' title='Show/Hide'>👁️</button>
-                            <button onclick='copyKey({index})' class='btn-icon' title='Copy'>📋</button>
+                            <code class='key-hash' title='SHA256 hash of API key'>{keyId.Substring(0, Math.Min(12, keyId.Length))}...</code>
+                            <span class='text-muted small'>(hash only)</span>
                         </div>";
                     
                     var actions = isActive 
@@ -416,28 +412,37 @@ namespace Company.Function
                     var timestamp = h.GetDateTimeOffset("Timestamp") ?? DateTimeOffset.MinValue;
                     var ipAddress = h.GetString("IpAddress") ?? "N/A";
                     var success = h.GetBoolean("Success") ?? false;
-                    var apiKeyUsed = h.GetString("ApiKeyId") ?? "Unknown";
-                    var statusBadge = success 
-                        ? "<span class='badge badge-success'>Success</span>" 
-                        : "<span class='badge badge-danger'>Failed</span>";
-                    return $"<tr><td>{timestamp:yyyy-MM-dd HH:mm:ss}</td><td>{ipAddress}</td><td class='text-muted'>{apiKeyUsed.Substring(0, Math.Min(8, apiKeyUsed.Length))}...</td><td>{statusBadge}</td></tr>";
+                    var message = h.GetString("Message") ?? "";
+                    var status = success ? "Success" : "Failed";
+                    
+                    return $"<tr><td>{timestamp:yyyy-MM-dd HH:mm:ss}</td><td>{ipAddress}</td><td>{status}</td><td class='text-muted small'>{message}</td></tr>";
                 }));
                 historyHtml = $@"
                 <div class='section'>
-                    <h2>Recent Update History</h2>
+                    <h2>Recent Updates</h2>
                     <table class='table'>
                         <thead>
                             <tr>
                                 <th>Timestamp</th>
                                 <th>IP Address</th>
-                                <th>API Key Used</th>
                                 <th>Status</th>
+                                <th>Message</th>
                             </tr>
                         </thead>
                         <tbody>
                             {rows}
                         </tbody>
                     </table>
+                </div>";
+            }
+            else
+            {
+                historyHtml = @"
+                <div class='section'>
+                    <h2>Update History</h2>
+                    <div class='alert alert-info'>
+                        <p>No updates recorded yet.</p>
+                    </div>
                 </div>";
             }
 
@@ -697,9 +702,9 @@ namespace Company.Function
             }}
         }}
         
-        function revokeKey(keyId) {{
+        function revokeKey(keyHash) {{
             if(confirm('Revoke this API key? It will no longer work for updates.')) {{
-                window.location.href = '/api/manage/{hostname}/revoke?key=' + encodeURIComponent(keyId);
+                window.location.href = '/api/manage/{hostname}/revoke?keyhash=' + encodeURIComponent(keyHash);
             }}
         }}
         
@@ -724,61 +729,6 @@ namespace Company.Function
         <div class='user-info'>Managed by: {userEmail ?? "Unknown"}</div>
         
         {apiKeysHtml}
-        
-        <div class='section'>
-            <h2>Quick Configuration</h2>
-            
-            <div class='config-form'>
-                <h3 style='margin-bottom: 20px; color: #2d3748;'>DynDNS2 Configuration</h3>
-                
-                <div class='form-group'>
-                    <label class='form-label'>Hostname</label>
-                    <div class='input-group'>
-                        <input type='text' id='hostname-field' class='form-input' value='{hostname}' readonly>
-                        <button onclick='copyField(""hostname-field"")' class='btn-icon' title='Copy'>📋</button>
-                    </div>
-                </div>
-                
-                <div class='form-group'>
-                    <label class='form-label'>Username</label>
-                    <div class='input-group'>
-                        <input type='text' id='username-field' class='form-input' value='{hostname.Split('.')[0]}' readonly>
-                        <button onclick='copyField(""username-field"")' class='btn-icon' title='Copy'>📋</button>
-                    </div>
-                </div>
-                
-                <div class='form-group'>
-                    <label class='form-label'>Password (API Key)</label>
-                    <div class='input-group'>
-                        <input type='password' id='password-field' class='form-input' value='{exampleKey}' readonly>
-                        <button onclick='(() => {{ const f = document.getElementById(""password-field""); f.type = f.type === ""password"" ? ""text"" : ""password""; }})()' class='btn-icon' title='Show/Hide'>👁️</button>
-                        <button onclick='copyField(""password-field"")' class='btn-icon' title='Copy'>📋</button>
-                    </div>
-                </div>
-                
-                <div class='form-group'>
-                    <label class='form-label'>Server/Update URL</label>
-                    <div class='input-group'>
-                        <input type='text' id='server-field' class='form-input' value='{req.Url.Host}/api/nic/update' readonly>
-                        <button onclick='copyField(""server-field"")' class='btn-icon' title='Copy'>📋</button>
-                    </div>
-                </div>
-            </div>
-            
-            <div class='config-form'>
-                <h3 style='margin-bottom: 20px; color: #2d3748;'>Command Line Examples</h3>
-                
-                <div class='form-group'>
-                    <label class='form-label'>curl</label>
-                    <div class='command-box'>curl -u ""{hostname.Split('.')[0]}:{exampleKey}"" ""https://{req.Url.Host}/api/nic/update?hostname={hostname}&myip=auto""</div>
-                </div>
-                
-                <div class='form-group'>
-                    <label class='form-label'>wget</label>
-                    <div class='command-box'>wget --auth-no-challenge --user=""{hostname.Split('.')[0]}"" --password=""{exampleKey}"" ""https://{req.Url.Host}/api/nic/update?hostname={hostname}&myip=auto""</div>
-                </div>
-            </div>
-        </div>
         
         {historyHtml}
         
