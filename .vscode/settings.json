@@ -1,6 +1,7 @@
 {
-    "azureFunctions.deploySubpath": ".",
-    "azureFunctions.projectLanguage": "PowerShell",
+    "azureFunctions.deploySubpath": "http/bin/Release/net8.0/publish",
+    "azureFunctions.projectLanguage": "C#",
     "azureFunctions.projectRuntime": "~4",
-    "debug.internalConsoleOptions": "neverOpen"
+    "debug.internalConsoleOptions": "neverOpen",
+    "azureFunctions.preDeployTask": "publish (functions)"
 }

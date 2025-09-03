@@ -2,13 +2,10 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Attach to Azure Function",
-            "type": "PowerShell",
+            "name": "Attach to .NET Functions",
+            "type": "coreclr",
             "request": "attach",
-            "customPipeName": "AzureFunctionsPSWorker",
-            "runspaceId": 1,
-            "processId": "${command:azureFunctions.pickProcess}",
-            "preLaunchTask": "func start" // This should match with next tasks.json label
+            "processId": "${command:azureFunctions.pickProcess}"
         }
     ]
 }

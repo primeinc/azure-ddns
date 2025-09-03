@@ -1,58 +1,238 @@
-# Azure DDNS
-Provides an Inadyn compatible  DynDNS2 API to be hosted by an Azure Function which uses an underlying Microsoft Azure hosted DNS Zone to maintain the IP address for a single A record.
+<!--
+---
+name: Azure Functions C# HTTP Trigger using Azure Developer CLI
+description: This repository contains an Azure Functions HTTP trigger quickstart written in C# and deployed to Azure Functions Flex Consumption using the Azure Developer CLI (azd). The sample uses managed identity and a virtual network to make sure deployment is secure by default.
+page_type: sample
+products:
+- azure-functions
+- azure
+- entra-id
+urlFragment: starter-http-trigger-csharp
+languages:
+- csharp
+- bicep
+- azdeveloper
+---
+-->
 
-## Deploying the Provider
-Within the Microsoft Azure Function portal:
-1. Create a new Azure Function.
-2. Open the Configuration pane, and add the following application settings:
-    - _AppUsername_ - This is the username that will be required to use the public endpoint.
-    - _AppPassword_ - This is the password that will be required to use the public endpoint. 
-    - _DnsZoneRGName_ - This will need to contain the Resource Group Name for your DNS Zone.
-3. Open the Identity pane, and enable a System or User Assigned identity. This identity __MUST__ have `DNS Zone Contributor` role for the DNS Zone the provider will be responsible for modifying.
-4. Deploy this codebase into your Azure Function.
+# Azure Functions C# HTTP Trigger using Azure Developer CLI
 
-NOTE: Because this provider uses Basic authentication, a colon (:) will not be supported as a character in the _AppPassword_ application setting.
+This template repository contains an HTTP trigger reference sample for functions written in C# (isolated process mode) and deployed to Azure using the Azure Developer CLI (`azd`). The sample uses managed identity and a virtual network to make sure deployment is secure by default. You can opt out of a VNet being used in the sample by setting VNET_ENABLED to false in the parameters.
 
-## Configuring the Inadyn Client
-The following file will need to be updated on the network device at the location: `/etc/inadyn.conf`. If you are using a device such as a Unifi Dream Machine or Dream Machine Pro, the file will instead be located at: `/run/ddns_eth{?}_inadyn.conf`.
+This source code supports the article [Quickstart: Create and deploy functions to Azure Functions using the Azure Developer CLI](https://learn.microsoft.com/azure/azure-functions/create-first-function-azure-developer-cli?pivots=programming-language-dotnet).
 
-```conf
-custom your-ddns.azurewebsites.net:1 {
-    hostname    = "your.azuredomain.com"
-    username    = "REDACTED"
-    password    = "REDACTED"
-    ddns-server = "your-ddns.azurewebsites.net"
-    ddns-path   = "/nic/update?hostname=%h&myip=%i"
+This project is designed to run on your local computer. You can also use GitHub Codespaces:
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?hide_repo_select=true&ref=main&repo=836901178)
+
+This codespace is already configured with the required tools to complete this tutorial using either `azd` or Visual Studio Code. If you're working a codespace, skip down to [Prepare your local environment](#prepare-your-local-environment).
+
+## Prerequisites
+
++ [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
++ [Azure Functions Core Tools](https://learn.microsoft.com/azure/azure-functions/functions-run-local?pivots=programming-language-csharp#install-the-azure-functions-core-tools)
++ To use Visual Studio to run and debug locally:
+  + [Visual Studio 2022](https://visualstudio.microsoft.com/vs/).
+  + Make sure to select the **Azure development** workload during installation.
++ To use Visual Studio Code to run and debug locally:
+  + [Visual Studio Code](https://code.visualstudio.com/)
+  + [Azure Functions extension](https://marketplace.visualstudio.com/items?itemName=ms-azuretools.vscode-azurefunctions)
+
+## Initialize the local project
+
+You can initialize a project from this `azd` template in one of these ways:
+
++ Use this `azd init` command from an empty local (root) folder:
+
+    ```shell
+    azd init --template functions-quickstart-dotnet-azd
+    ```
+
+    Supply an environment name, such as `flexquickstart` when prompted. In `azd`, the environment is used to maintain a unique deployment context for your app.
+
++ Clone the GitHub template repository locally using the `git clone` command:
+
+    ```shell
+    git clone https://github.com/Azure-Samples/functions-quickstart-dotnet-azd.git
+    cd functions-quickstart-dotnet-azd
+    ```
+
+    You can also clone the repository from your own fork in GitHub.
+
+## Prepare your local environment
+
+Navigate to the `http` app folder and create a file in that folder named _local.settings.json_ that contains this JSON data:
+
+```json
+{
+    "IsEncrypted": false,
+    "Values": {
+        "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+        "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated"
+    }
 }
 ```
 
-#### Provider Options
-- _hostname_: This __MUST__ be the FQDN of the DNS entry to update.
-- _username_: This __MUST__ match the username used in the _AppUsername_ application configuration setting.
-- _password_: This __MUST__ match the password used in the _AppPassword_ application configuration setting.
-- _ddns-server_: This is the location where the Azure Function has been deployed.
-- _ddns-path_: DO NOT CHANGE!
+## Run your app from the terminal
 
-## Testing
-To test this, you will need to have command line access to the device running the `inadyn.service`.
-```txt
-inadyn -1n --force --loglevel=DEBUG --config=/etc/inadyn.conf
+1. From the `http` folder, run this command to start the Functions host locally:
+
+    ```shell
+    func start
+    ```
+
+1. From your HTTP test tool in a new terminal (or from your browser), call the HTTP GET endpoint: <http://localhost:7071/api/httpget>
+
+1. Test the HTTP POST trigger with a payload using your favorite secure HTTP test tool.
+
+    **Cmd\bash**
+
+    This example runs from the `http` folder and uses the `curl` tool with payload data from the [`testdata.json`](./http/testdata.json) project file:
+
+    ```shell
+    curl -i http://localhost:7071/api/httppost -H "Content-Type: text/json" -d @testdata.json
+    ```
+
+    **PowerShell**
+
+    You can also use this `Invoke-RestMethod` cmdlet in PowerShell from the `http` folder:
+
+    ```powershell
+    Invoke-RestMethod -Uri http://localhost:7071/api/httppost -Method Post -ContentType "application/json" -InFile "testdata.json"
+    ```
+
+1. When you're done, press Ctrl+C in the terminal window to stop the `func.exe` host process.
+
+## Run your app using Visual Studio Code
+
+1. Open the `http` app folder in a new terminal.
+1. Run the `code .` code command to open the project in Visual Studio Code.
+1. In the command palette (F1), type `Azurite: Start`, which enables debugging without warnings.
+1. Press **Run/Debug (F5)** to run in the debugger. Select **Debug anyway** if prompted about local emulator not running.
+1. Send GET and POST requests to the `httpget` and `httppost` endpoints respectively using your HTTP test tool (or browser for `httpget`). If you have the [RestClient](https://marketplace.visualstudio.com/items?itemName=humao.rest-client) extension installed, you can execute requests directly from the [`test.http`](./http/test.http) project file.
+
+## Run your app using Visual Studio
+
+1. Open the `http.sln` solution file in Visual Studio.
+1. Press **Run/F5** to run in the debugger. Make a note of the `localhost` URL endpoints, including the port, which might not be `7071`.
+1. Open the [`test.http`](./http/test.http) project file, update the port on the `localhost` URL (if needed), and then use the built-in HTTP client to call the `httpget` and `httppost` endpoints.
+
+## Source Code
+
+The function code for the `httpget` and `httppost` endpoints are defined in [`httpGetFunction.cs`](./http/httpGetFunction.cs) and [`httpPostBodyFunction.cs`](./http/httpPostBodyFunction.cs), respectively. The `Function` attribute applied to the async `Run` method sets the name of the function endpoint.
+
+This code shows an HTTP GET (webhook):  
+
+```csharp
+[Function("httpget")]
+public IActionResult Run([HttpTrigger(AuthorizationLevel.Function, "get")]
+    HttpRequest req,
+    string name)
+{
+    var returnValue = string.IsNullOrEmpty(name)
+        ? "Hello, World."
+        : $"Hello, {name}.";
+
+    _logger.LogInformation($"C# HTTP trigger function processed a request for {returnValue}.");
+
+    return new OkObjectResult(returnValue);
+}
 ```
 
-The following snippet shows what you should see on the Inadyn client logs when communicating with your DDNS service:
-```log
-inadyn[527119]: Sending alias table update to DDNS server: GET /nic/update?hostname=your.azuredomain.com&myip=REDACTED HTTP/1.0
-inadyn[527119]: Host: your-ddns.azurewebsites.net
-inadyn[527119]: Authorization: Basic REDACTED
-inadyn[527119]: User-Agent: inadyn/2.9.1 https://github.com/troglobit/inadyn/issues
-inadyn[527119]: Successfully sent HTTPS request!
-inadyn[527119]: Successfully received HTTPS response (205/8191 bytes)!
-inadyn[527119]: DDNS server response: HTTP/1.1 200 OK
-Connection: close
-Content-Type: text/plain; charset=utf-8
-Date: Sun, 31 Dec 2023 02:16:13 GMT
+This code shows the HTTP POST that received a JSON formatted `person` object in the request body and returns a message using the values in the payload:
 
-good
-inadyn[527119]: Successful alias table update for your.azuredomain.com => new IP# REDACTED
-inadyn[527119]: Updating cache for your.azuredomain.com
+```csharp
+[Function("httppost")]
+public IActionResult Run([HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequest req,
+    [FromBody] Person person)
+{
+    _logger.LogInformation($"C# HTTP POST trigger function processed a request for url {req.Body}");
+
+    if (string.IsNullOrEmpty(person.Name) | string.IsNullOrEmpty(person.Age.ToString()) | person.Age == 0)
+    {
+        _logger.LogInformation("C# HTTP POST trigger function processed a request with no name/age provided.");
+        return new BadRequestObjectResult("Please provide both name and age in the request body.");
+    }
+
+    var returnValue = $"Hello, {person.Name}! You are {person.Age} years old.";
+    
+    _logger.LogInformation($"C# HTTP POST trigger function processed a request for {person.Name} who is {person.Age} years old.");
+    return new OkObjectResult(returnValue);
+}
 ```
+
+## Deploy to Azure
+
+Run this command to provision the function app, with any required Azure resources, and deploy your code:
+
+```shell
+azd up
+```
+
+By default, this sample prompts to enable a virtual network for enhanced security. If you want to deploy without a virtual network without prompting, you can configure `VNET_ENABLED` to `false` before running `azd up`:
+
+```bash
+azd env set VNET_ENABLED false
+azd up
+```
+
+You're prompted to supply these required deployment parameters:
+
+| Parameter | Description |
+| ---- | ---- |
+| _Environment name_ | An environment that's used to maintain a unique deployment context for your app. You won't be prompted if you created the local project using `azd init`.|
+| _Azure subscription_ | Subscription in which your resources are created.|
+| _Azure location_ | Azure region in which to create the resource group that contains the new Azure resources. Only regions that currently support the Flex Consumption plan are shown.|
+
+After publish completes successfully, `azd` provides you with the URL endpoints of your new functions, but without the function key values required to access the endpoints. To learn how to obtain these same endpoints along with the required function keys, see [Invoke the function on Azure](https://learn.microsoft.com/azure/azure-functions/create-first-function-azure-developer-cli?pivots=programming-language-dotnet#invoke-the-function-on-azure) in the companion article [Quickstart: Create and deploy functions to Azure Functions using the Azure Developer CLI](https://learn.microsoft.com/azure/azure-functions/create-first-function-azure-developer-cli?pivots=programming-language-dotnet).
+
+## Redeploy your code
+
+You can run the `azd up` command as many times as you need to both provision your Azure resources and deploy code updates to your function app.
+
+>[!NOTE]
+>Deployed code files are always overwritten by the latest deployment package.
+
+## Clean up resources
+
+When you're done working with your function app and related resources, you can use this command to delete the function app and its related resources from Azure and avoid incurring any further costs:
+
+```shell
+azd down
+```
+
+## 🔄 Template Propagation Workflow
+
+This repository serves as a source template for changes that need to be propagated across the Azure Functions AZD template family. The automated workflow includes:
+
+### Quick Start
+```bash
+# Navigate to propagation directory
+cd .github/prompts/.propagation
+
+# Generate dynamic status report
+npm run report
+
+# Open the interactive HTML report
+open propagation-status-report.html
+```
+
+### Batch Propagation
+Use the prompt template in `.github/prompts/batch-propagation-prompt.md` to automatically:
+
+1. **Discover targets** across Azure Functions AZD templates using multiple methods
+2. **Apply changes** consistently across all related repositories
+3. **Create pull requests** with enhanced validation and best practices
+4. **Track progress** in `propagation.targets.json`
+5. **Generate reports** with interactive HTML dashboards
+
+### Dynamic Reporting
+The propagation system includes a Node.js-based dynamic reporting tool that transforms JSON tracking data into beautiful, interactive HTML reports featuring:
+
+- 📊 **Progress dashboards** with completion statistics
+- 🏷️ **Technology groupings** (.NET, Python, JavaScript, etc.)
+- 🔗 **Clickable links** to repositories and pull requests
+- 📱 **Responsive design** for all devices
+- 🎯 **Real-time accuracy** - always reflects current JSON data
+
+**Documentation**: See `.github/prompts/.propagation/README.md` for complete workflow details and `.github/prompts/.propagation/WORKFLOW_INSTRUCTIONS.md` for detailed end-to-end process requirements.
