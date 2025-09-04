@@ -39,6 +39,7 @@ namespace Company.Function
         {
             var invocationId = Guid.NewGuid().ToString("N").Substring(0, 8);
             var invocationNumber = System.Threading.Interlocked.Increment(ref _invocationCount);
+            var startTime = DateTimeOffset.UtcNow;
             
             _logger.LogInformation("====================================================");
             _logger.LogInformation($"[{invocationId}] DDNS UPDATE FUNCTION INVOKED");
@@ -55,6 +56,7 @@ namespace Company.Function
                 string? password = null;
                 bool isApiKeyAuth = false;
                 string? authenticatedHostname = null;
+                string? apiKey = null;
                 
                 if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Basic "))
                 {
@@ -74,9 +76,10 @@ namespace Company.Function
                         _logger.LogInformation($"[{invocationId}] Basic Auth decoded - Username: {username}");
                         
                         // Try API key authentication first
-                        var apiKey = await _apiKeyService.GetApiKeyFromBasicAuth(authHeader);
+                        apiKey = await _apiKeyService.GetApiKeyFromBasicAuth(authHeader);
                         if (!string.IsNullOrEmpty(apiKey))
                         {
+                            // Note: We don't pass the IP here yet since it hasn't been determined
                             var (isValid, validatedHostname) = await _apiKeyService.ValidateApiKeyAsync(apiKey);
                             if (isValid && !string.IsNullOrEmpty(validatedHostname))
                             {
@@ -414,9 +417,28 @@ namespace Company.Function
                 
                 var (updateResult, oldIp) = await UpdateDnsRecord(invocationId, dnsZoneName, recordName, myip);
                 
-                // Log update to Table Storage
+                // Calculate response time
+                var responseTime = (DateTimeOffset.UtcNow - startTime).TotalMilliseconds;
+                
+                // Log update to Table Storage with enhanced information
                 bool updateSuccess = updateResult == "good" || updateResult == "nochg";
-                await _tableStorage.LogUpdateAsync(hostname, myip, updateSuccess, updateResult);
+                var apiKeyHash = isApiKeyAuth && !string.IsNullOrEmpty(apiKey) ? _apiKeyService.HashApiKey(apiKey) : null;
+                await _tableStorage.LogUpdateAsync(
+                    hostname, 
+                    myip, 
+                    updateSuccess, 
+                    updateResult,
+                    authMethodForLogging,
+                    apiKeyHash,
+                    oldIp,
+                    (long)responseTime);
+                
+                // Update API key usage statistics if this was API key auth and update was successful
+                if (isApiKeyAuth && updateSuccess && !string.IsNullOrEmpty(apiKeyHash))
+                {
+                    _logger.LogInformation($"[{invocationId}] Updating API key usage statistics for successful update");
+                    await _tableStorage.UpdateApiKeyUsageAsync(apiKeyHash, myip);
+                }
                 
                 // Log DDNS update attempt with comprehensive telemetry
                 var errorMessage = updateResult == "911" ? "DNS update operation failed" : null;

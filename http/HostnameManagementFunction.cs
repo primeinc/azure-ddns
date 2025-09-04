@@ -197,7 +197,7 @@ namespace Company.Function
 <body>
     <div class='container'>
         <h1>{hostname} <span class='status'>Active</span></h1>
-        <div class='user-info'>Managed by: {userEmail ?? "Unknown"}</div>
+        <div class='user-info'>Managed by: <span class='user-email' onclick='triggerEasterEgg()'>{userEmail ?? "Unknown"}</span></div>
         
         {apiKeyDisplay}
         
@@ -249,7 +249,15 @@ namespace Company.Function
             var apiKeysHtml = "";
             if (apiKeys != null && apiKeys.Count > 0)
             {
-                var rows = string.Join("\n", apiKeys.Select((key, index) =>
+                // Sort API keys by LastUsed (most recent first), then by CreatedAt for never-used keys
+                var sortedKeys = apiKeys.OrderByDescending(k => 
+                {
+                    var lastUsed = k.GetDateTimeOffset("LastUsed");
+                    if (lastUsed.HasValue) return lastUsed.Value;
+                    return k.GetDateTimeOffset("CreatedAt") ?? DateTimeOffset.MinValue;
+                }).ToList();
+                
+                var rows = string.Join("\n", sortedKeys.Select((key, index) =>
                 {
                     var keyId = key.PartitionKey ?? "unknown";
                     var createdAt = key.GetDateTimeOffset("CreatedAt") ?? DateTimeOffset.MinValue;
@@ -265,7 +273,15 @@ namespace Company.Function
                     var lastUsedStr = lastUsed?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Never";
                     
                     // Display key hash (we don't store actual keys for security)
-                    var keyDisplay = $@"
+                    // First key in sorted list (most recently used) gets hot pink styling
+                    var isHottest = index == 0 && lastUsed.HasValue;
+                    var keyDisplay = isHottest 
+                        ? $@"
+                        <div class='key-display'>
+                            <code class='key-hash hottest-key' title='SHA256 hash of API key - MOST RECENTLY USED 🔥'>{keyId.Substring(0, Math.Min(12, keyId.Length))}...</code>
+                            <span class='text-muted small'>🔥 (latest)</span>
+                        </div>"
+                        : $@"
                         <div class='key-display'>
                             <code class='key-hash' title='SHA256 hash of API key'>{keyId.Substring(0, Math.Min(12, keyId.Length))}...</code>
                             <span class='text-muted small'>(hash only)</span>
@@ -335,11 +351,40 @@ namespace Company.Function
                 {
                     var timestamp = h.GetDateTimeOffset("Timestamp") ?? DateTimeOffset.MinValue;
                     var ipAddress = h.GetString("IpAddress") ?? "N/A";
+                    var oldIpAddress = h.GetString("OldIpAddress") ?? "unknown";
                     var success = h.GetBoolean("Success") ?? false;
                     var message = h.GetString("Message") ?? "";
-                    var status = success ? "Success" : "Failed";
+                    var authMethod = h.GetString("AuthMethod") ?? "unknown";
+                    var apiKeyHash = h.GetString("ApiKeyHash") ?? "none";
+                    var responseTimeMs = h.GetInt64("ResponseTimeMs") ?? 0;
+                    var status = success ? "✓" : "✗";
+                    var statusClass = success ? "text-success" : "text-danger";
                     
-                    return $"<tr><td>{timestamp:yyyy-MM-dd HH:mm:ss}</td><td>{ipAddress}</td><td>{status}</td><td class='text-muted small'>{message}</td></tr>";
+                    // Format IP change
+                    var ipChange = string.IsNullOrEmpty(oldIpAddress) || oldIpAddress == "unknown" 
+                        ? ipAddress 
+                        : (oldIpAddress == ipAddress ? ipAddress : $"{oldIpAddress} → {ipAddress}");
+                    
+                    // Format auth method with icon
+                    var authDisplay = authMethod switch
+                    {
+                        "ApiKey" => "🔑 API Key",
+                        "Legacy" => "🔒 Legacy",
+                        _ => authMethod
+                    };
+                    
+                    // Format response time
+                    var responseTimeDisplay = responseTimeMs > 0 ? $"{responseTimeMs}ms" : "-";
+                    
+                    return $@"<tr>
+                        <td>{timestamp:yyyy-MM-dd HH:mm:ss}</td>
+                        <td style='font-family: monospace;'>{ipChange}</td>
+                        <td>{authDisplay}</td>
+                        <td style='font-family: monospace;' class='text-muted small'>{apiKeyHash}</td>
+                        <td>{responseTimeDisplay}</td>
+                        <td class='{statusClass}'>{status}</td>
+                        <td class='text-muted small'>{message}</td>
+                    </tr>";
                 }));
                 historyHtml = $@"
                 <div class='section'>
@@ -348,7 +393,10 @@ namespace Company.Function
                         <thead>
                             <tr>
                                 <th>Timestamp</th>
-                                <th>IP Address</th>
+                                <th>IP Change</th>
+                                <th>Auth Method</th>
+                                <th>API Key</th>
+                                <th>Response Time</th>
                                 <th>Status</th>
                                 <th>Message</th>
                             </tr>
@@ -376,45 +424,66 @@ namespace Company.Function
 <head>
     <title>DDNS Management - {hostname}</title>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{ 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            font-family: 'Orbitron', -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace; 
+            background: #0a0a0a;
+            background: linear-gradient(135deg, #1a1a2e 0%, #0f0f1e 50%, #1a0033 100%);
             min-height: 100vh;
             padding: 20px;
+            position: relative;
+            overflow-x: hidden;
         }}
         .container {{ 
-            background: white; 
+            background: #0a0a0a;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             padding: 40px; 
-            border-radius: 12px; 
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1); 
+            border-radius: 8px; 
+            border: 1px solid #6a00ff;
+            box-shadow: 
+                0 0 20px rgba(106, 0, 255, 0.3),
+                inset 0 0 20px rgba(0, 255, 255, 0.05); 
             max-width: 1400px; 
-            margin: 0 auto; 
+            margin: 0 auto;
+            position: relative;
         }}
         h1 {{ 
-            color: #1a202c; 
+            color: #00ffff;
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
             margin-bottom: 10px; 
             display: flex;
             align-items: center;
             gap: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 2px;
         }}
         h2 {{
-            color: #2d3748;
+            color: #ff00ff;
+            text-shadow: 0 0 8px rgba(255, 0, 255, 0.5);
             margin-bottom: 20px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-size: 18px;
         }}
         .status {{ 
             display: inline-block; 
             padding: 4px 12px; 
-            border-radius: 20px; 
-            background: #48bb78; 
-            color: white; 
-            font-size: 14px; 
-            font-weight: 500;
+            border-radius: 4px; 
+            background: #00ff88;
+            color: #000; 
+            font-size: 12px; 
+            font-weight: 700;
+            text-transform: uppercase;
+            box-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
         }}
         .user-info {{ 
-            color: #718096; 
+            color: #00ffff; 
             margin-bottom: 30px; 
             font-size: 14px;
+            text-shadow: 0 0 5px #00ffff;
         }}
         .section {{
             margin-bottom: 40px;
@@ -470,18 +539,29 @@ namespace Company.Function
             font-size: 14px;
         }}
         .btn-primary {{
-            background: #4299e1;
-            color: white;
+            background: linear-gradient(90deg, #00ffaa 0%, #00ffff 100%);
+            color: #000;
+            font-weight: 600;
+            text-transform: uppercase;
+            box-shadow: 0 2px 8px rgba(0, 255, 170, 0.3);
+            border: 1px solid #00ffaa;
         }}
         .btn-primary:hover {{
-            background: #3182ce;
+            background: linear-gradient(90deg, #00ffff 0%, #00ffaa 100%);
+            box-shadow: 0 2px 12px rgba(0, 255, 170, 0.5);
+            transform: translateY(-1px);
         }}
         .btn-danger {{
-            background: #f56565;
-            color: white;
+            background: #ff0066;
+            color: #fff;
+            font-weight: 600;
+            text-transform: uppercase;
+            box-shadow: 0 2px 8px rgba(255, 0, 102, 0.3);
+            border: 1px solid #ff0066;
         }}
         .btn-danger:hover {{
-            background: #e53e3e;
+            background: #ff3366;
+            box-shadow: 0 2px 12px rgba(255, 0, 102, 0.5);
         }}
         .btn-sm {{
             padding: 6px 12px;
@@ -511,25 +591,56 @@ namespace Company.Function
         .table {{
             width: 100%;
             border-collapse: collapse;
+            border: 1px solid #ff00ff;
         }}
         .table thead th {{
-            background: #f7fafc;
+            background: #1a1a2e;
             padding: 12px;
             text-align: left;
-            font-weight: 600;
-            color: #4a5568;
-            border-bottom: 2px solid #e2e8f0;
+            font-weight: 700;
+            color: #00ffff;
+            border-bottom: 1px solid #6a00ff;
+            border-right: 1px solid rgba(106, 0, 255, 0.2);
             font-size: 13px;
             text-transform: uppercase;
+            text-shadow: 0 0 5px rgba(0, 255, 255, 0.5);
+            position: relative;
+        }}
+        .table thead th:last-child {{
+            border-right: none;
+        }}
+        .table thead th::after {{
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, 
+                transparent 0%, 
+                rgba(106, 0, 255, 0.1) 20%, 
+                rgba(106, 0, 255, 0.2) 50%, 
+                rgba(106, 0, 255, 0.1) 80%, 
+                transparent 100%);
+            pointer-events: none;
         }}
         .table tbody td {{
             padding: 12px;
-            border-bottom: 1px solid #e2e8f0;
-            color: #2d3748;
+            border-bottom: 1px solid rgba(106, 0, 255, 0.2);
+            border-right: 1px solid rgba(106, 0, 255, 0.1);
+            color: #00ff99;
             font-size: 14px;
+            text-shadow: 0 0 3px rgba(0, 255, 153, 0.5);
+        }}
+        .table tbody td:last-child {{
+            border-right: none;
         }}
         .table tbody tr:hover {{
-            background: #f7fafc;
+            background: rgba(255, 0, 255, 0.1);
+            box-shadow: inset 0 0 30px rgba(255, 0, 255, 0.2);
+        }}
+        .table tbody tr:last-child td {{
+            border-bottom: 1px solid #6a00ff;
         }}
         .badge {{
             padding: 4px 8px;
@@ -538,17 +649,29 @@ namespace Company.Function
             font-weight: 600;
         }}
         .badge-success {{
-            background: #c6f6d5;
-            color: #22543d;
+            background: #00ff00;
+            color: #000;
+            box-shadow: 0 0 10px #00ff00;
+            font-weight: 700;
         }}
         .badge-danger {{
-            background: #fed7d7;
-            color: #742a2a;
+            background: #ff0066;
+            color: #fff;
+            box-shadow: 0 0 10px #ff0066;
+            font-weight: 700;
         }}
         .key-display {{
             display: flex;
             gap: 8px;
             align-items: center;
+        }}
+        .key-hash {{
+            font-family: 'CaskaydiaCove NFM', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Orbitron', monospace;
+        }}
+        .hottest-key {{
+            color: #ff00ff !important;
+            font-weight: 700;
+            text-shadow: 0 0 8px rgba(255, 0, 255, 0.8);
         }}
         .key-input {{
             flex: 1;
@@ -579,23 +702,91 @@ namespace Company.Function
             overflow-x: auto;
             white-space: nowrap;
         }}
+        .user-email {{
+            color: #00ff99;
+            cursor: pointer;
+            text-decoration: underline;
+            transition: all 0.3s;
+            display: inline-block;
+        }}
+        .user-email:hover {{
+            animation: rainbow 2s linear infinite;
+            text-shadow: 0 0 10px rgba(255, 0, 255, 0.8);
+            transform: scale(1.05);
+        }}
+        @keyframes rainbow {{
+            0% {{ color: #ff0000; }}
+            16% {{ color: #ff8800; }}
+            33% {{ color: #ffff00; }}
+            50% {{ color: #00ff00; }}
+            66% {{ color: #0088ff; }}
+            83% {{ color: #8800ff; }}
+            100% {{ color: #ff0000; }}
+        }}
+        .matrix-container {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            pointer-events: none;
+            overflow: hidden;
+            z-index: 9999;
+        }}
+        .matrix-char {{
+            position: absolute;
+            font-family: 'CaskaydiaCove NFM', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Courier New', monospace;
+            font-size: 20px;
+            color: #00ff00;
+            animation: matrixFall linear;
+            text-shadow: 0 0 5px #00ff00;
+            font-weight: 400;
+        }}
+        @keyframes matrixFall {{
+            0% {{
+                transform: translateY(-100px);
+                opacity: 1;
+            }}
+            70% {{
+                opacity: 1;
+            }}
+            100% {{
+                transform: translateY(calc(100vh + 100px));
+                opacity: 0;
+            }}
+        }}
         .text-muted {{
-            color: #a0aec0;
+            color: #9966ff;
+            text-shadow: 0 0 2px #9966ff;
+        }}
+        .text-success {{
+            color: #00ff00;
+            text-shadow: 0 0 5px #00ff00;
+            font-weight: 700;
+        }}
+        .text-danger {{
+            color: #ff0066;
+            text-shadow: 0 0 5px #ff0066;
+            font-weight: 700;
         }}
         footer {{
             margin-top: 40px;
             padding-top: 20px;
-            border-top: 1px solid #e2e8f0;
-            color: #718096;
+            border-top: 2px solid #ff00ff;
+            color: #00ffff;
             font-size: 14px;
             text-align: center;
+            text-shadow: 0 0 5px #00ffff;
         }}
         footer a {{
-            color: #4299e1;
+            color: #ff00ff;
             text-decoration: none;
+            text-shadow: 0 0 5px #ff00ff;
+            font-weight: 700;
         }}
         footer a:hover {{
-            text-decoration: underline;
+            text-decoration: none;
+            text-shadow: 0 0 10px #ff00ff, 0 0 20px #ff00ff;
         }}
     </style>
     <script>
@@ -645,12 +836,59 @@ namespace Company.Function
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), 3000);
         }}
+        
+        function triggerEasterEgg() {{
+            // Create Matrix rain container
+            const container = document.createElement('div');
+            container.className = 'matrix-container';
+            document.body.appendChild(container);
+            
+            // Matrix characters
+            const chars = '01アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン';
+            const columns = Math.floor(window.innerWidth / 20);
+            
+            // Create falling characters
+            for (let i = 0; i < columns; i++) {{
+                setTimeout(() => {{
+                    const charElem = document.createElement('div');
+                    charElem.className = 'matrix-char';
+                    charElem.style.left = (i * 20) + 'px';
+                    charElem.style.animationDuration = (3 + Math.random() * 2) + 's';
+                    charElem.style.animationDelay = Math.random() + 's';
+                    
+                    // Random character stream
+                    const charCount = 10 + Math.floor(Math.random() * 10);
+                    let charStream = '';
+                    for (let j = 0; j < charCount; j++) {{
+                        charStream += chars[Math.floor(Math.random() * chars.length)] + '<br>';
+                    }}
+                    charElem.innerHTML = charStream;
+                    
+                    container.appendChild(charElem);
+                    
+                    // Remove character after animation
+                    setTimeout(() => {{
+                        charElem.remove();
+                    }}, 5000);
+                }}, i * 50);
+            }}
+            
+            // Remove container after all animations complete
+            setTimeout(() => {{
+                container.remove();
+            }}, 8000);
+            
+            // Show special message
+            setTimeout(() => {{
+                showToast('🎉 You found the Matrix! Welcome to the real world...');
+            }}, 1000);
+        }}
     </script>
 </head>
 <body>
     <div class='container'>
         <h1>{hostname} <span class='status'>Active</span></h1>
-        <div class='user-info'>Managed by: {userEmail ?? "Unknown"}</div>
+        <div class='user-info'>Managed by: <span class='user-email' onclick='triggerEasterEgg()'>{userEmail ?? "Unknown"}</span></div>
         
         {apiKeysHtml}
         

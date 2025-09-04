@@ -164,6 +164,34 @@ namespace Company.Function.Services
             }
         }
 
+        public async Task UpdateApiKeyUsageAsync(string apiKeyHash, string clientIp)
+        {
+            try
+            {
+                // Get the existing entity
+                var response = _apiKeysTable.QueryAsync<TableEntity>(
+                    filter: $"PartitionKey eq '{apiKeyHash}'",
+                    maxPerPage: 1);
+                
+                await foreach (var entity in response)
+                {
+                    // Update usage stats
+                    var currentCount = entity.GetInt32("UseCount") ?? 0;
+                    entity["UseCount"] = currentCount + 1;
+                    entity["LastUsed"] = DateTimeOffset.UtcNow;
+                    entity["LastUsedFromIp"] = clientIp;
+                    
+                    await _apiKeysTable.UpdateEntityAsync(entity, entity.ETag, TableUpdateMode.Replace);
+                    _logger.LogInformation($"[AUDIT-USAGE] Updated usage stats for API key hash '{apiKeyHash.Substring(0, 8)}...': Count={currentCount + 1}, IP={clientIp}");
+                    break;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"[AUDIT-USAGE-ERROR] Failed to update usage stats for API key hash '{apiKeyHash.Substring(0, 8)}...'");
+            }
+        }
+
         public async Task<(string? hostname, bool isValid)> ValidateApiKeyAsync(string apiKeyHash)
         {
             _logger.LogDebug($"[AUDIT-AUTH] Validating API key with hash '{apiKeyHash.Substring(0, 8)}...'");
@@ -308,7 +336,15 @@ namespace Company.Function.Services
         }
 
         // Update History Operations
-        public async Task LogUpdateAsync(string hostname, string ipAddress, bool success, string? message = null)
+        public async Task LogUpdateAsync(
+            string hostname, 
+            string ipAddress, 
+            bool success, 
+            string? message = null,
+            string? authMethod = null,
+            string? apiKeyHash = null,
+            string? oldIp = null,
+            long? responseTimeMs = null)
         {
             var timestamp = DateTimeOffset.UtcNow;
             
@@ -319,9 +355,13 @@ namespace Company.Function.Services
                 var entity = new TableEntity(hostname, timestamp.Ticks.ToString())
                 {
                     ["IpAddress"] = ipAddress,
+                    ["OldIpAddress"] = oldIp ?? "unknown",
                     ["Success"] = success,
                     ["Message"] = message ?? string.Empty,
                     ["Timestamp"] = timestamp,
+                    ["AuthMethod"] = authMethod ?? "unknown",
+                    ["ApiKeyHash"] = apiKeyHash != null ? apiKeyHash.Substring(0, Math.Min(12, apiKeyHash.Length)) + "..." : "none",
+                    ["ResponseTimeMs"] = responseTimeMs ?? 0,
                     ["InstanceId"] = Environment.GetEnvironmentVariable("WEBSITE_INSTANCE_ID") ?? "local",
                     ["UserAgent"] = Environment.GetEnvironmentVariable("HTTP_USER_AGENT") ?? "unknown"
                 };

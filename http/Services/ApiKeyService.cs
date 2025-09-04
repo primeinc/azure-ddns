@@ -86,7 +86,7 @@ namespace Company.Function.Services
             }
         }
 
-        public async Task<(bool isValid, string? hostname)> ValidateApiKeyAsync(string apiKey)
+        public async Task<(bool isValid, string? hostname)> ValidateApiKeyAsync(string apiKey, string? clientIp = null)
         {
             var keyPreview = apiKey.Length > 8 ? apiKey.Substring(0, 8) : apiKey;
             _logger.LogDebug($"[AUDIT-VALIDATE] Starting API key validation for key '{keyPreview}...'");
@@ -103,6 +103,13 @@ namespace Company.Function.Services
                 if (isValid && !string.IsNullOrEmpty(hostname))
                 {
                     _logger.LogInformation($"[AUDIT-VALIDATE-SUCCESS] API key validated successfully for hostname '{hostname}' (hash: '{apiKeyHash.Substring(0, 8)}...')");
+                    
+                    // Update usage statistics if client IP is provided
+                    if (!string.IsNullOrEmpty(clientIp))
+                    {
+                        await _tableStorage.UpdateApiKeyUsageAsync(apiKeyHash, clientIp);
+                    }
+                    
                     return (true, hostname);
                 }
                 
@@ -202,7 +209,7 @@ namespace Company.Function.Services
             return apiKey;
         }
 
-        private string HashApiKey(string apiKey)
+        public string HashApiKey(string apiKey)
         {
             using (var sha256 = SHA256.Create())
             {
