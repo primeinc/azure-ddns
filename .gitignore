@@ -3,12 +3,16 @@
 
 # Azure Functions localsettings file
 local.settings.json
+*.local.json
+.claude/settings.local.json
 
 # Azurite config files
 __azurite*
 __blobstorage*
 __queue*
 __table*
+AzuriteConfig
+.azurite/
 
 # User-specific files
 *.suo

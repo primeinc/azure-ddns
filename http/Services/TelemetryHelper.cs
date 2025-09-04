@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using http.Utilities;
 
 namespace Company.Function.Services
 {
@@ -525,60 +526,9 @@ namespace Company.Function.Services
         /// <returns>Client IP address or "unknown" if not determinable</returns>
         private string ExtractSourceIp(HttpRequest req)
         {
-            if (req == null) return "unknown";
-
-            try
-            {
-                // Try Azure-specific headers first (most reliable in Azure environment)
-                var azureClientIp = req.Headers["X-Azure-ClientIP"].FirstOrDefault();
-                if (!string.IsNullOrEmpty(azureClientIp))
-                {
-                    return CleanIpAddress(azureClientIp);
-                }
-
-                // Try X-Forwarded-For (most common proxy header)
-                var forwardedFor = req.Headers["X-Forwarded-For"].FirstOrDefault();
-                if (!string.IsNullOrEmpty(forwardedFor))
-                {
-                    // Take the first IP in the chain (original client)
-                    var firstIp = forwardedFor.Split(',')[0].Trim();
-                    if (!string.IsNullOrEmpty(firstIp))
-                    {
-                        return CleanIpAddress(firstIp);
-                    }
-                }
-
-                // Try X-Real-IP
-                var realIp = req.Headers["X-Real-IP"].FirstOrDefault();
-                if (!string.IsNullOrEmpty(realIp))
-                {
-                    return CleanIpAddress(realIp);
-                }
-
-                // Try X-Original-For
-                var originalFor = req.Headers["X-Original-For"].FirstOrDefault();
-                if (!string.IsNullOrEmpty(originalFor))
-                {
-                    var firstIp = originalFor.Split(',')[0].Trim();
-                    if (!string.IsNullOrEmpty(firstIp))
-                    {
-                        return CleanIpAddress(firstIp);
-                    }
-                }
-
-                // Fall back to connection remote IP
-                var connectionIp = req.HttpContext?.Connection?.RemoteIpAddress?.ToString();
-                if (!string.IsNullOrEmpty(connectionIp))
-                {
-                    return CleanIpAddress(connectionIp);
-                }
-
-                return "unknown";
-            }
-            catch (Exception)
-            {
-                return "unknown";
-            }
+            // Use centralized IP extraction utility to follow DRY principle
+            var ip = IpAddressUtility.ExtractSourceIp(req, _logger);
+            return ip ?? "unknown";
         }
 
         /// <summary>
@@ -588,41 +538,10 @@ namespace Company.Function.Services
         /// <returns>Clean IP address</returns>
         private string CleanIpAddress(string ipAddress)
         {
+            // Use centralized IP cleaning utility to follow DRY principle
             if (string.IsNullOrEmpty(ipAddress)) return "unknown";
-
-            try
-            {
-                // Remove IPv6 brackets and port: [::1]:41380 -> ::1
-                if (ipAddress.StartsWith("[") && ipAddress.Contains("]:"))
-                {
-                    var endBracket = ipAddress.IndexOf("]:");
-                    return ipAddress.Substring(1, endBracket - 1);
-                }
-                
-                // Remove brackets from IPv6: [::1] -> ::1
-                if (ipAddress.StartsWith("[") && ipAddress.EndsWith("]"))
-                {
-                    return ipAddress.Substring(1, ipAddress.Length - 2);
-                }
-                
-                // Remove port from IPv4: 1.2.3.4:80 -> 1.2.3.4
-                if (ipAddress.Contains(':') && ipAddress.Split('.').Length == 4)
-                {
-                    return ipAddress.Substring(0, ipAddress.LastIndexOf(':'));
-                }
-
-                // Validate IP format
-                if (IPAddress.TryParse(ipAddress, out _))
-                {
-                    return ipAddress;
-                }
-
-                return "invalid";
-            }
-            catch (Exception)
-            {
-                return "unknown";
-            }
+            var cleaned = IpAddressUtility.CleanIpAddress(ipAddress);
+            return string.IsNullOrEmpty(cleaned) ? "unknown" : cleaned;
         }
 
         /// <summary>
@@ -662,39 +581,8 @@ namespace Company.Function.Services
         /// <returns>True if the IP is private/internal</returns>
         public bool IsPrivateOrInternalIP(string ipAddress)
         {
-            if (!IPAddress.TryParse(ipAddress, out var ip))
-                return false;
-
-            // Check for loopback
-            if (IPAddress.IsLoopback(ip))
-                return true;
-
-            // Check for IPv4 private ranges
-            var bytes = ip.GetAddressBytes();
-            if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
-            {
-                // 10.0.0.0/8
-                if (bytes[0] == 10)
-                    return true;
-
-                // 172.16.0.0/12
-                if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
-                    return true;
-
-                // 192.168.0.0/16
-                if (bytes[0] == 192 && bytes[1] == 168)
-                    return true;
-
-                // 127.0.0.0/8 (loopback)
-                if (bytes[0] == 127)
-                    return true;
-
-                // 169.254.0.0/16 (link-local)
-                if (bytes[0] == 169 && bytes[1] == 254)
-                    return true;
-            }
-
-            return false;
+            // Use centralized IP validation utility to follow DRY principle
+            return IpAddressUtility.IsPrivateIpAddress(ipAddress);
         }
     }
 }

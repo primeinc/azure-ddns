@@ -109,6 +109,19 @@ param budgetAlertEmails string = ''
 @description('Enable Azure spending budget with alerts')
 param enableBudget bool = true
 
+// Security Configuration Parameters
+@description('Environment type - controls security settings')
+@allowed(['dev', 'staging', 'production'])
+param environmentType string = 'dev'
+
+@description('Custom username for DDNS authentication (auto-generated if not provided)')
+@secure()
+param ddnsUsername string = ''
+
+@description('Custom password for DDNS authentication (auto-generated if not provided)')
+@secure()
+param ddnsPassword string = ''
+
 var abbrs = loadJsonContent('./abbreviations.json')
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
 var tags = { 'azd-env-name': environmentName }
@@ -120,6 +133,18 @@ resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
   name: !empty(resourceGroupName) ? resourceGroupName : '${abbrs.resourcesResourceGroups}${environmentName}'
   location: location
   tags: tags
+}
+
+// Security Configuration Module - MUST come first for credential generation
+module securityConfig './security-config.bicep' = {
+  name: 'securityConfig'
+  scope: rg
+  params: {
+    environmentType: environmentType
+    customUsername: ddnsUsername
+    customPassword: ddnsPassword
+    generateSecurePassword: empty(ddnsPassword)
+  }
 }
 
 // User assigned managed identity to be used by the function app to reach storage and other dependencies
@@ -198,18 +223,18 @@ module keyVault 'br/public:avm/res/key-vault/vault:0.9.0' = {
     name: take('kv${resourceToken}', 24) // Key Vault names limited to 24 chars
     location: location
     tags: tags
-    enableRbacAuthorization: true
-    enablePurgeProtection: false // COST: Set to true for production, false saves costs in dev
-    softDeleteRetentionInDays: 7 // COST: Minimum retention period
+    enableRbacAuthorization: securityConfig.outputs.keyVaultConfig.enableRbacAuthorization
+    enablePurgeProtection: securityConfig.outputs.keyVaultConfig.enablePurgeProtection
+    softDeleteRetentionInDays: securityConfig.outputs.keyVaultConfig.softDeleteRetentionInDays
     sku: 'standard' // COST: Standard SKU is more cost-effective than Premium
     secrets: [
       {
         name: 'ddns-username'
-        value: 'admin' // TODO: Update via deployment parameter
+        value: securityConfig.outputs.appUsername
       }
       {
         name: 'ddns-password'
-        value: 'password' // TODO: Update via deployment parameter  
+        value: securityConfig.outputs.appPassword
       }
     ]
     roleAssignments: [
