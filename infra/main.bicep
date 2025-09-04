@@ -69,12 +69,8 @@ param dnsResourceGroupName string = 'domains-dns'
 @description('DNS zone name to update')
 param dnsZoneName string = 'title.dev'
 
-// Azure AD Configuration for EasyAuth
-@description('Azure AD tenant ID for authentication')
-param azureAdTenantId string
-
-@description('Azure AD application (client) ID')
-param azureAdClientId string
+// Azure AD Configuration for EasyAuth - now managed by aad-app.bicep module
+// Legacy parameters removed - app registration is now deployed via Bicep
 
 // Custom Domain Configuration
 @description('Custom domain name for the Function App (e.g., ddns-sandbox.title.dev)')
@@ -142,6 +138,17 @@ module securityConfig './security-config.bicep' = {
   }
 }
 
+// Azure AD App Registration - Configure claims and roles
+module aadApp './aad-app.bicep' = {
+  name: 'aadApp'
+  scope: tenant()
+  params: {
+    functionAppHostname: !empty(customDomainName) ? customDomainName : '${functionAppName}.azurewebsites.net'
+    appUniqueName: 'ddns-management-app-${resourceToken}'
+    displayName: 'Azure DDNS Service (${environmentName})'
+  }
+}
+
 // User assigned managed identity to be used by the function app to reach storage and other dependencies
 // Assign specific roles to this identity in the RBAC module
 module apiUserAssignedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.4.1' = {
@@ -201,8 +208,8 @@ module api './app/api.bicep' = {
       // DDNS_USERNAME: '@Microsoft.KeyVault(VaultName=${keyVault.outputs.name};SecretName=ddns-username)'
       // DDNS_PASSWORD: '@Microsoft.KeyVault(VaultName=${keyVault.outputs.name};SecretName=ddns-password)'
       KEY_VAULT_URI: keyVault.outputs.uri
-      AZURE_AD_TENANT_ID: azureAdTenantId
-      AZURE_AD_CLIENT_ID: azureAdClientId
+      AZURE_AD_TENANT_ID: tenant().tenantId
+      AZURE_AD_CLIENT_ID: aadApp.outputs.appId
       AZURE_STORAGE_ACCOUNT_NAME: storage.outputs.name
       LOG_ANALYTICS_WORKSPACE_ID: logAnalytics.outputs.logAnalyticsWorkspaceId
       BOOTSTRAP_ADMIN_DOMAINS: bootstrapAdminDomains  // Configurable admin domains for bootstrap access

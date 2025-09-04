@@ -81,7 +81,7 @@ namespace Company.Function
                 ShowRegenerateForm = false
             };
 
-            var html = await _templateService.RenderTemplateAsync("api-key-management.html", model);
+            var html = await _templateService.RenderAdvancedTemplateAsync("api-key-management.html", model);
             await response.WriteStringAsync(html);
             _logger.LogInformation($"[AUDIT-NEWKEY-SUCCESS] New API key generated and displayed for {hostname}");
             return response;

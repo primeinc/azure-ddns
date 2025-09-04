@@ -184,7 +184,7 @@ namespace Company.Function
                 }).Take(10).ToArray() ?? Array.Empty<object>()
             };
 
-            var html = await _templateService.RenderTemplateAsync("hostname-management.html", model);
+            var html = await _templateService.RenderAdvancedTemplateAsync("hostname-management.html", model);
             
             // If we have a new API key, inject it into the page with a special display
             if (apiKey != null)
@@ -262,7 +262,7 @@ namespace Company.Function
                 }).Take(10).ToArray() ?? Array.Empty<object>()
             };
 
-            var html = await _templateService.RenderTemplateAsync("hostname-management.html", model);
+            var html = await _templateService.RenderAdvancedTemplateAsync("hostname-management.html", model);
             await response.WriteStringAsync(html);
             return response;
         }

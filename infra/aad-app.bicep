@@ -84,6 +84,11 @@ resource ddnsApp 'Microsoft.Graph/applications@v1.0' = {
         source: null
         essential: false
       }
+      {
+        name: 'groups'
+        source: null
+        essential: false
+      }
     ]
     accessToken: [
       {
@@ -91,8 +96,14 @@ resource ddnsApp 'Microsoft.Graph/applications@v1.0' = {
         source: null
         essential: false
       }
+      {
+        name: 'groups'
+        source: null
+        essential: false
+      }
     ]
   }
+  groupMembershipClaims: 'All'
 }
 
 // Ensure a service principal exists for the app

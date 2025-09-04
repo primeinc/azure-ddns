@@ -92,7 +92,7 @@ namespace Company.Function
             };
 
             // Render the template
-            var html = await _templateService.RenderTemplateAsync("AdminPanelTemplate.html", model);
+            var html = await _templateService.RenderAdvancedTemplateAsync("AdminPanelTemplate.html", model);
 
             var response = req.CreateResponse(System.Net.HttpStatusCode.OK);
             response.Headers.Add("Content-Type", "text/html; charset=utf-8");
