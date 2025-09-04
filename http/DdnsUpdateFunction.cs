@@ -318,48 +318,23 @@ namespace Company.Function
                 
                 // Parse hostname to extract subdomain and zone
                 var dnsZoneName = Environment.GetEnvironmentVariable("DNS_ZONE_NAME") ?? "title.dev";
-                var ddnsSubdomain = Environment.GetEnvironmentVariable("DDNS_SUBDOMAIN") ?? "ddns";
+                var ddnsSubdomain = Environment.GetEnvironmentVariable("DDNS_SUBDOMAIN") ?? "ddns-sandbox";
                 
-                // Support multiple patterns:
-                // 1. *.ddns.title.dev (e.g., wan1-mro-tru.ddns.title.dev)
-                // 2. *.*.ddns.title.dev (e.g., wan1.mro.tru.ddns.title.dev)
-                // 3. *.*.*.ddns.title.dev (e.g., wan1.stg.tru.ddns.title.dev)
-                // 4. Direct under zone (e.g., wan1.ftl.cts.title.dev)
+                // SECURITY: Only allow updates to records under the configured DDNS subdomain
+                // For example, if DDNS_SUBDOMAIN=ddns-sandbox and DNS_ZONE_NAME=title.dev,
+                // then ONLY hostnames like *.ddns-sandbox.title.dev are allowed.
+                // This prevents any modifications to the root domain or other subdomains.
                 
                 string recordName = string.Empty;
-                bool isValidHostname = false;
                 
-                // Check if it ends with .ddns.title.dev pattern
-                var ddnsPattern = $".{ddnsSubdomain}.{dnsZoneName}";
-                if (hostname.EndsWith(ddnsPattern))
+                // Build the required suffix: .{ddnsSubdomain}.{dnsZoneName}
+                // e.g., ".ddns-sandbox.title.dev"
+                var requiredSuffix = $".{ddnsSubdomain}.{dnsZoneName}";
+                
+                // SECURITY CHECK: Hostname MUST end with the exact configured subdomain
+                if (!hostname.EndsWith(requiredSuffix))
                 {
-                    // Extract everything before .ddns.title.dev
-                    var prefix = hostname.Substring(0, hostname.Length - ddnsPattern.Length);
-                    if (!string.IsNullOrEmpty(prefix))
-                    {
-                        // Record name in DNS is prefix.ddns (e.g., wan1.mro.tru.ddns)
-                        recordName = $"{prefix}.{ddnsSubdomain}";
-                        isValidHostname = true;
-                        _logger.LogInformation($"[{invocationId}] DDNS pattern matched: {prefix} under {ddnsSubdomain}.{dnsZoneName}");
-                    }
-                }
-                // Check if it's directly under the zone (e.g., wan1.ftl.cts.title.dev)
-                else if (hostname.EndsWith($".{dnsZoneName}"))
-                {
-                    // Extract everything before .title.dev
-                    var prefix = hostname.Substring(0, hostname.Length - $".{dnsZoneName}".Length);
-                    if (!string.IsNullOrEmpty(prefix))
-                    {
-                        // Record name in DNS is just the prefix (e.g., wan1.ftl.cts)
-                        recordName = prefix;
-                        isValidHostname = true;
-                        _logger.LogInformation($"[{invocationId}] Direct zone pattern matched: {prefix} under {dnsZoneName}");
-                    }
-                }
-                else
-                {
-                    _logger.LogWarning($"[{invocationId}] Invalid hostname format: {hostname}");
-                    _logger.LogWarning($"[{invocationId}] Expected: *.{ddnsSubdomain}.{dnsZoneName} or *.{dnsZoneName}");
+                    _logger.LogWarning($"[{invocationId}] SECURITY: Rejected hostname '{hostname}' - does not match required pattern '*.{ddnsSubdomain}.{dnsZoneName}'");
                     _telemetryHelper.LogDdnsUpdateAttempt(
                         req,
                         hostname: hostname,
@@ -368,14 +343,18 @@ namespace Company.Function
                         resultCode: "nohost",
                         isSuccess: false,
                         correlationId: invocationId,
-                        errorMessage: $"Invalid hostname format: {hostname}. Expected: *.{ddnsSubdomain}.{dnsZoneName} or *.{dnsZoneName}"
+                        errorMessage: $"Security: Hostname must end with {requiredSuffix}"
                     );
                     return CreateDynDnsResponse("nohost", invocationId);
                 }
                 
-                if (!isValidHostname)
+                // Extract the prefix (everything before the required suffix)
+                var prefix = hostname.Substring(0, hostname.Length - requiredSuffix.Length);
+                
+                // Validate that we have a non-empty prefix
+                if (string.IsNullOrEmpty(prefix))
                 {
-                    _logger.LogWarning($"[{invocationId}] Empty or invalid prefix in hostname: {hostname}");
+                    _logger.LogWarning($"[{invocationId}] Invalid hostname: empty prefix in '{hostname}'");
                     _telemetryHelper.LogDdnsUpdateAttempt(
                         req,
                         hostname: hostname,
@@ -384,10 +363,16 @@ namespace Company.Function
                         resultCode: "nohost",
                         isSuccess: false,
                         correlationId: invocationId,
-                        errorMessage: $"Empty or invalid prefix in hostname: {hostname}"
+                        errorMessage: "Hostname must have a prefix before the subdomain"
                     );
                     return CreateDynDnsResponse("nohost", invocationId);
                 }
+                
+                // The DNS record name will be: prefix.ddnsSubdomain
+                // e.g., "mydevice.ddns-sandbox" for hostname "mydevice.ddns-sandbox.title.dev"
+                recordName = $"{prefix}.{ddnsSubdomain}";
+                _logger.LogInformation($"[{invocationId}] Valid DDNS hostname: {hostname} -> DNS record: {recordName} in zone {dnsZoneName}");
+                
                 
                 // Validate DNS name (alphanumeric, dots, and hyphens only)
                 if (!System.Text.RegularExpressions.Regex.IsMatch(recordName, @"^[a-zA-Z0-9\.\-]+$"))

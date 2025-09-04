@@ -204,7 +204,7 @@ module api './app/api.bicep' = {
       DNS_SUBSCRIPTION_ID: dnsSubscriptionId
       DNS_RESOURCE_GROUP: dnsResourceGroupName
       DNS_ZONE_NAME: dnsZoneName
-      DDNS_SUBDOMAIN: 'ddns'
+      DDNS_SUBDOMAIN: 'ddns-sandbox'  // SECURITY: This is the FULL subdomain that can be updated
       DDNS_USERNAME: '@Microsoft.KeyVault(VaultName=${keyVault.outputs.name};SecretName=ddns-username)'
       DDNS_PASSWORD: '@Microsoft.KeyVault(VaultName=${keyVault.outputs.name};SecretName=ddns-password)'
       KEY_VAULT_URI: keyVault.outputs.uri
