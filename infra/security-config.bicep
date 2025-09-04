@@ -4,16 +4,7 @@ targetScope = 'resourceGroup'
 @allowed(['dev', 'staging', 'production'])
 param environmentType string = 'dev'
 
-@description('Generate secure random password for default accounts')
-param generateSecurePassword bool = true
-
-@description('Optional custom username (generated if not provided)')
-@secure()
-param customUsername string = ''
-
-@description('Optional custom password (generated if not provided)')
-@secure()
-param customPassword string = ''
+// Legacy DDNS basic auth parameters removed - using API key system
 
 // Security configuration based on environment
 var securityConfig = {
@@ -37,15 +28,8 @@ var securityConfig = {
   }
 }
 
-// Generate secure credentials if not provided
-var finalUsername = !empty(customUsername) ? customUsername : 'admin-${uniqueString(resourceGroup().id)}'
-var finalPassword = !empty(customPassword) ? customPassword : generateSecurePassword ? '${uniqueString(resourceGroup().id, deployment().name)}${toUpper(uniqueString(subscription().id))}!@#' : 'MUST-CHANGE-THIS-PASSWORD!'
-
 // Output security configuration for use in other modules
 output securitySettings object = securityConfig[environmentType]
-output appUsername string = finalUsername
-@secure()
-output appPassword string = finalPassword
 output environment string = environmentType
 
 // Key Vault configuration with environment-appropriate settings

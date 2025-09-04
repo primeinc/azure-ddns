@@ -114,13 +114,7 @@ param enableBudget bool = true
 @allowed(['dev', 'staging', 'production'])
 param environmentType string = 'dev'
 
-@description('Custom username for DDNS authentication (auto-generated if not provided)')
-@secure()
-param ddnsUsername string = ''
-
-@description('Custom password for DDNS authentication (auto-generated if not provided)')
-@secure()
-param ddnsPassword string = ''
+// Legacy DDNS basic auth removed - using API key system via /api/manage/{hostname}
 
 @description('Semicolon-separated list of email domains for bootstrap admin access (e.g., "@domain1.com;@domain2.com")')
 param bootstrapAdminDomains string = ''
@@ -144,9 +138,7 @@ module securityConfig './security-config.bicep' = {
   scope: rg
   params: {
     environmentType: environmentType
-    customUsername: ddnsUsername
-    customPassword: ddnsPassword
-    generateSecurePassword: empty(ddnsPassword)
+    // Legacy auth removed - no username/password needed
   }
 }
 
@@ -205,8 +197,9 @@ module api './app/api.bicep' = {
       DNS_RESOURCE_GROUP: dnsResourceGroupName
       DNS_ZONE_NAME: dnsZoneName
       DDNS_SUBDOMAIN: 'ddns-sandbox'  // SECURITY: This is the FULL subdomain that can be updated
-      DDNS_USERNAME: '@Microsoft.KeyVault(VaultName=${keyVault.outputs.name};SecretName=ddns-username)'
-      DDNS_PASSWORD: '@Microsoft.KeyVault(VaultName=${keyVault.outputs.name};SecretName=ddns-password)'
+      // Legacy auth - only for local dev/testing, production should use API keys via /api/manage/{hostname}
+      // DDNS_USERNAME: '@Microsoft.KeyVault(VaultName=${keyVault.outputs.name};SecretName=ddns-username)'
+      // DDNS_PASSWORD: '@Microsoft.KeyVault(VaultName=${keyVault.outputs.name};SecretName=ddns-password)'
       KEY_VAULT_URI: keyVault.outputs.uri
       AZURE_AD_TENANT_ID: azureAdTenantId
       AZURE_AD_CLIENT_ID: azureAdClientId
@@ -231,16 +224,7 @@ module keyVault 'br/public:avm/res/key-vault/vault:0.9.0' = {
     enablePurgeProtection: securityConfig.outputs.keyVaultConfig.enablePurgeProtection
     softDeleteRetentionInDays: securityConfig.outputs.keyVaultConfig.softDeleteRetentionInDays
     sku: 'standard' // COST: Standard SKU is more cost-effective than Premium
-    secrets: [
-      {
-        name: 'ddns-username'
-        value: securityConfig.outputs.appUsername
-      }
-      {
-        name: 'ddns-password'
-        value: securityConfig.outputs.appPassword
-      }
-    ]
+    secrets: []  // No secrets needed - using API key system via /api/manage/{hostname}
     roleAssignments: [
       {
         principalId: apiUserAssignedIdentity.outputs.principalId
