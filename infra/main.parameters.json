@@ -28,6 +28,15 @@
     },
     "azureAdClientId": {
       "value": "${AZURE_AD_CLIENT_ID}"
+    },
+    "monthlyBudgetLimit": {
+      "value": "${MONTHLY_BUDGET_LIMIT=50}"
+    },
+    "budgetAlertEmails": {
+      "value": "${BUDGET_ALERT_EMAILS=}"
+    },
+    "enableBudget": {
+      "value": "${ENABLE_BUDGET=false}"
     }
   }
 }

@@ -21,13 +21,15 @@ namespace Company.Function
         private readonly ILogger<DdnsUpdateFunction> _logger;
         private readonly ApiKeyService _apiKeyService;
         private readonly TableStorageService _tableStorage;
+        private readonly TelemetryHelper _telemetryHelper;
         private static int _invocationCount = 0;
 
-        public DdnsUpdateFunction(ILogger<DdnsUpdateFunction> logger, ApiKeyService apiKeyService, TableStorageService tableStorage)
+        public DdnsUpdateFunction(ILogger<DdnsUpdateFunction> logger, ApiKeyService apiKeyService, TableStorageService tableStorage, TelemetryHelper telemetryHelper)
         {
             _logger = logger;
             _apiKeyService = apiKeyService;
             _tableStorage = tableStorage;
+            _telemetryHelper = telemetryHelper;
             _logger.LogInformation("====== DdnsUpdateFunction CONSTRUCTOR called ======");
         }
 
@@ -93,6 +95,9 @@ namespace Company.Function
                 // Get query parameters (DynDNS2 protocol)
                 var hostname = req.Query["hostname"].FirstOrDefault();
                 var myip = req.Query["myip"].FirstOrDefault();
+                
+                // Determine auth method for logging once and reuse throughout
+                var authMethodForLogging = GetAuthMethod(isApiKeyAuth, username);
                 
                 _logger.LogInformation($"[{invocationId}] Query Parameters:");
                 _logger.LogInformation($"[{invocationId}]   hostname = {hostname ?? "null"}");
@@ -190,12 +195,32 @@ namespace Company.Function
                 if (string.IsNullOrEmpty(authHeader))
                 {
                     _logger.LogWarning($"[{invocationId}] No authorization provided");
+                    _telemetryHelper.LogDdnsUpdateAttempt(
+                        req,
+                        hostname: hostname,
+                        ipAddress: myip,
+                        authMethod: "None",
+                        resultCode: "badauth",
+                        isSuccess: false,
+                        correlationId: invocationId,
+                        errorMessage: "No authorization provided"
+                    );
                     return CreateDynDnsResponse("badauth", invocationId);
                 }
                 
                 if (string.IsNullOrEmpty(hostname))
                 {
                     _logger.LogWarning($"[{invocationId}] No hostname provided");
+                    _telemetryHelper.LogDdnsUpdateAttempt(
+                        req,
+                        hostname: hostname,
+                        ipAddress: myip,
+                        authMethod: authMethodForLogging,
+                        resultCode: "notfqdn",
+                        isSuccess: false,
+                        correlationId: invocationId,
+                        errorMessage: "No hostname provided"
+                    );
                     return CreateDynDnsResponse("notfqdn", invocationId);
                 }
                 
@@ -203,6 +228,16 @@ namespace Company.Function
                 {
                     _logger.LogWarning($"[{invocationId}] Failed to determine IP address - auto-detection found only loopback or no valid IP");
                     _logger.LogWarning($"[{invocationId}] Please specify IP explicitly with myip parameter instead of using 'auto'");
+                    _telemetryHelper.LogDdnsUpdateAttempt(
+                        req,
+                        hostname: hostname,
+                        ipAddress: myip,
+                        authMethod: authMethodForLogging,
+                        resultCode: "911",
+                        isSuccess: false,
+                        correlationId: invocationId,
+                        errorMessage: "Failed to determine IP address - auto-detection found only loopback or no valid IP"
+                    );
                     return CreateDynDnsResponse("911", invocationId);
                 }
                 
@@ -210,6 +245,16 @@ namespace Company.Function
                 if (!IPAddress.TryParse(myip, out var ipAddress))
                 {
                     _logger.LogWarning($"[{invocationId}] Invalid IP address format: {myip}");
+                    _telemetryHelper.LogDdnsUpdateAttempt(
+                        req,
+                        hostname: hostname,
+                        ipAddress: myip,
+                        authMethod: authMethodForLogging,
+                        resultCode: "911",
+                        isSuccess: false,
+                        correlationId: invocationId,
+                        errorMessage: $"Invalid IP address format: {myip}"
+                    );
                     return CreateDynDnsResponse("911", invocationId);
                 }
                 
@@ -224,6 +269,16 @@ namespace Company.Function
                         !hostname.StartsWith($"{authenticatedHostname}.", StringComparison.OrdinalIgnoreCase))
                     {
                         _logger.LogWarning($"[{invocationId}] API key hostname mismatch - authenticated: {authenticatedHostname}, requested: {hostname}");
+                        _telemetryHelper.LogDdnsUpdateAttempt(
+                            req,
+                            hostname: hostname,
+                            ipAddress: myip,
+                            authMethod: "ApiKey",
+                            resultCode: "nohost",
+                            isSuccess: false,
+                            correlationId: invocationId,
+                            errorMessage: $"API key hostname mismatch - authenticated: {authenticatedHostname}, requested: {hostname}"
+                        );
                         return CreateDynDnsResponse("nohost", invocationId);
                     }
                     isAuthenticated = true;
@@ -245,6 +300,16 @@ namespace Company.Function
                 if (!isAuthenticated)
                 {
                     _logger.LogWarning($"[{invocationId}] Authentication failed for user: {username}");
+                    _telemetryHelper.LogDdnsUpdateAttempt(
+                        req,
+                        hostname: hostname,
+                        ipAddress: myip,
+                        authMethod: authMethodForLogging,
+                        resultCode: "badauth",
+                        isSuccess: false,
+                        correlationId: invocationId,
+                        errorMessage: $"Authentication failed for user: {username}"
+                    );
                     return CreateDynDnsResponse("badauth", invocationId);
                 }
                 
@@ -292,12 +357,32 @@ namespace Company.Function
                 {
                     _logger.LogWarning($"[{invocationId}] Invalid hostname format: {hostname}");
                     _logger.LogWarning($"[{invocationId}] Expected: *.{ddnsSubdomain}.{dnsZoneName} or *.{dnsZoneName}");
+                    _telemetryHelper.LogDdnsUpdateAttempt(
+                        req,
+                        hostname: hostname,
+                        ipAddress: myip,
+                        authMethod: authMethodForLogging,
+                        resultCode: "nohost",
+                        isSuccess: false,
+                        correlationId: invocationId,
+                        errorMessage: $"Invalid hostname format: {hostname}. Expected: *.{ddnsSubdomain}.{dnsZoneName} or *.{dnsZoneName}"
+                    );
                     return CreateDynDnsResponse("nohost", invocationId);
                 }
                 
                 if (!isValidHostname)
                 {
                     _logger.LogWarning($"[{invocationId}] Empty or invalid prefix in hostname: {hostname}");
+                    _telemetryHelper.LogDdnsUpdateAttempt(
+                        req,
+                        hostname: hostname,
+                        ipAddress: myip,
+                        authMethod: authMethodForLogging,
+                        resultCode: "nohost",
+                        isSuccess: false,
+                        correlationId: invocationId,
+                        errorMessage: $"Empty or invalid prefix in hostname: {hostname}"
+                    );
                     return CreateDynDnsResponse("nohost", invocationId);
                 }
                 
@@ -305,6 +390,16 @@ namespace Company.Function
                 if (!System.Text.RegularExpressions.Regex.IsMatch(recordName, @"^[a-zA-Z0-9\.\-]+$"))
                 {
                     _logger.LogWarning($"[{invocationId}] Invalid characters in DNS record name: {recordName}");
+                    _telemetryHelper.LogDdnsUpdateAttempt(
+                        req,
+                        hostname: hostname,
+                        ipAddress: myip,
+                        authMethod: authMethodForLogging,
+                        resultCode: "nohost",
+                        isSuccess: false,
+                        correlationId: invocationId,
+                        errorMessage: $"Invalid characters in DNS record name: {recordName}"
+                    );
                     return CreateDynDnsResponse("nohost", invocationId);
                 }
                 
@@ -317,11 +412,32 @@ namespace Company.Function
                 _logger.LogInformation($"[{invocationId}]   Type: A");
                 _logger.LogInformation($"[{invocationId}]   IP: {myip}");
                 
-                var updateResult = await UpdateDnsRecord(invocationId, dnsZoneName, recordName, myip);
+                var (updateResult, oldIp) = await UpdateDnsRecord(invocationId, dnsZoneName, recordName, myip);
                 
                 // Log update to Table Storage
                 bool updateSuccess = updateResult == "good" || updateResult == "nochg";
                 await _tableStorage.LogUpdateAsync(hostname, myip, updateSuccess, updateResult);
+                
+                // Log DDNS update attempt with comprehensive telemetry
+                var errorMessage = updateResult == "911" ? "DNS update operation failed" : null;
+                _telemetryHelper.LogDdnsUpdateAttempt(
+                    req,
+                    hostname: hostname,
+                    ipAddress: myip,
+                    authMethod: authMethodForLogging,
+                    resultCode: updateResult,
+                    isSuccess: updateSuccess,
+                    correlationId: invocationId,
+                    errorMessage: errorMessage,
+                    recordType: "A",
+                    ttl: 60
+                );
+                
+                // Log old IP for nochg responses
+                if (updateResult == "nochg" && !string.IsNullOrEmpty(oldIp))
+                {
+                    _logger.LogInformation($"[{invocationId}] DDNS nochg response - current IP: {oldIp}, requested IP: {myip}");
+                }
                 
                 _logger.LogInformation($"[{invocationId}] DNS update result: {updateResult}");
                 _logger.LogInformation($"[{invocationId}] Update logged to Table Storage");
@@ -338,11 +454,23 @@ namespace Company.Function
                 _logger.LogError($"[{invocationId}] Stack trace: {ex.StackTrace}");
                 Console.WriteLine($"[CONSOLE] DdnsUpdate {invocationId} ERROR: {ex.Message}");
                 
+                // Log the exception as a 911 error with telemetry
+                _telemetryHelper.LogDdnsUpdateAttempt(
+                    req,
+                    hostname: req?.Query["hostname"].FirstOrDefault(),
+                    ipAddress: req?.Query["myip"].FirstOrDefault(),
+                    authMethod: "Unknown",
+                    resultCode: "911",
+                    isSuccess: false,
+                    correlationId: invocationId,
+                    errorMessage: $"Unhandled exception: {ex.Message}"
+                );
+                
                 return CreateDynDnsResponse("911", invocationId);
             }
         }
         
-        private async Task<string> UpdateDnsRecord(string invocationId, string zoneName, string recordName, string ipAddress)
+        private async Task<(string result, string? oldIp)> UpdateDnsRecord(string invocationId, string zoneName, string recordName, string ipAddress)
         {
             try
             {
@@ -356,7 +484,7 @@ namespace Company.Function
                 {
                     _logger.LogWarning($"[{invocationId}] DNS_SUBSCRIPTION_ID not configured");
                     _logger.LogWarning($"[{invocationId}] Simulating DNS update for development");
-                    return "good"; // Simulate success for local development
+                    return ("good", null); // Simulate success for local development
                 }
                 
                 _logger.LogInformation($"[{invocationId}] Target subscription: {subscriptionId}");
@@ -403,7 +531,7 @@ namespace Company.Function
                     if (currentIp == ipAddress)
                     {
                         _logger.LogInformation($"[{invocationId}] IP unchanged: {ipAddress}");
-                        return "nochg";
+                        return ("nochg", currentIp);
                     }
                 }
                 catch
@@ -438,13 +566,13 @@ namespace Company.Function
                 }
                 
                 _logger.LogInformation($"[{invocationId}] DNS record updated successfully");
-                return "good";
+                return ("good", null);
             }
             catch (Exception ex)
             {
                 _logger.LogError($"[{invocationId}] DNS update failed: {ex.Message}");
                 _logger.LogError($"[{invocationId}] Stack trace: {ex.StackTrace}");
-                return "911";
+                return ("911", null);
             }
         }
         
@@ -496,6 +624,16 @@ namespace Company.Function
             }
             
             return false;
+        }
+        
+        /// <summary>
+        /// Helper method to determine the authentication method for logging
+        /// </summary>
+        private string GetAuthMethod(bool isApiKeyAuth, string? username)
+        {
+            if (isApiKeyAuth) return "ApiKey";
+            if (!string.IsNullOrEmpty(username)) return "BasicAuth";
+            return "None";
         }
     }
 }

@@ -30,7 +30,7 @@ namespace Company.Function
             _logger.LogInformation($"[AUDIT-NEWKEY] New API key requested for hostname: {hostname}");
 
             // Get user from EasyAuth header
-            var (userId, userEmail) = GetUser(req, _logger);
+            var (userId, userEmail) = AuthenticationHelper.GetUserFromHeaders(req, _logger);
 
             if (string.IsNullOrEmpty(userId))
             {
@@ -311,7 +311,7 @@ namespace Company.Function
             _logger.LogInformation($"[AUDIT-REVOKE] Revoke API key requested for hostname: {hostname}, key hash: {keyHashToRevoke?.Substring(0, Math.Min(8, keyHashToRevoke?.Length ?? 0))}...");
 
             // Get user from EasyAuth header
-            var (userId, userEmail) = GetUser(req, _logger);
+            var (userId, userEmail) = AuthenticationHelper.GetUserFromHeaders(req, _logger);
 
             if (string.IsNullOrEmpty(userId))
             {
@@ -351,7 +351,7 @@ namespace Company.Function
             _logger.LogInformation($"[AUDIT-REVOKEALL] Revoke ALL API keys requested for hostname: {hostname}");
 
             // Get user from EasyAuth header
-            var (userId, userEmail) = GetUser(req, _logger);
+            var (userId, userEmail) = AuthenticationHelper.GetUserFromHeaders(req, _logger);
 
             if (string.IsNullOrEmpty(userId))
             {
@@ -390,47 +390,5 @@ namespace Company.Function
             return response;
         }
 
-        private static (string? oid, string? upn) GetUser(HttpRequestData req, ILogger log)
-        {
-            // Get user from EasyAuth header
-            if (!req.Headers.TryGetValues("X-MS-CLIENT-PRINCIPAL", out var vals))
-            {
-                // Try direct headers
-                req.Headers.TryGetValues("X-MS-CLIENT-PRINCIPAL-ID", out var idVals);
-                req.Headers.TryGetValues("X-MS-CLIENT-PRINCIPAL-NAME", out var nameVals);
-                return (idVals?.FirstOrDefault(), nameVals?.FirstOrDefault());
-            }
-
-            var raw = vals.FirstOrDefault();
-            if (string.IsNullOrEmpty(raw)) return (null, null);
-
-            try
-            {
-                var json = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(raw));
-                using var doc = JsonDocument.Parse(json);
-                string? oid = null, upn = null;
-
-                if (doc.RootElement.TryGetProperty("claims", out var claims))
-                {
-                    foreach (var claim in claims.EnumerateArray())
-                    {
-                        if (claim.TryGetProperty("typ", out var typ) && claim.TryGetProperty("val", out var val))
-                        {
-                            var typeStr = typ.GetString();
-                            var valStr = val.GetString();
-                            if (typeStr == "http://schemas.microsoft.com/identity/claims/objectidentifier") oid = valStr;
-                            if (typeStr == "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn") upn = valStr;
-                        }
-                    }
-                }
-                
-                return (oid, upn);
-            }
-            catch (Exception ex)
-            {
-                log.LogError(ex, "[AUDIT] Failed to parse X-MS-CLIENT-PRINCIPAL");
-                return (null, null);
-            }
-        }
     }
 }

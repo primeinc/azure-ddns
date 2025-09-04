@@ -11,8 +11,15 @@ param serviceName string = 'api'
 param storageAccountName string
 param deploymentStorageContainerName string
 param virtualNetworkSubnetId string = ''
-param instanceMemoryMB int = 2048
-param maximumInstanceCount int = 100
+// COST OPTIMIZATION: Flex Consumption plan settings
+@description('Memory allocation per instance in MB (512, 1024, 2048, 4096)')
+@allowed([512, 1024, 2048, 4096])
+param instanceMemoryMB int = 512 // COST: 512MB is sufficient for DDNS updates
+
+@description('Maximum number of instances for auto-scaling')
+@minValue(40)
+@maxValue(1000)
+param maximumInstanceCount int = 40 // COST: Minimum for Flex Consumption plan
 param identityId string = ''
 param identityClientId string = ''
 param enableBlob bool = true
@@ -89,8 +96,8 @@ resource api 'Microsoft.Web/sites@2023-12-01' = {
       cors: {
         allowedOrigins: ['https://portal.azure.com']
       }
-      functionAppScaleLimit: maximumInstanceCount
-      minimumElasticInstanceCount: 0
+      // Flex Consumption doesn't use minimumElasticInstanceCount or functionAppScaleLimit
+      // Scaling is controlled via functionAppConfig.scaleAndConcurrency
     }
     functionAppConfig: {
       deployment: {
@@ -132,7 +139,7 @@ resource auth 'Microsoft.Web/sites/config@2024-11-01' = {
       azureActiveDirectory: {
         enabled: true
         registration: {
-          openIdIssuer: 'https://login.microsoftonline.com/${tenant().tenantId}/v2.0'
+          openIdIssuer: '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
           clientId: appSettings.AZURE_AD_CLIENT_ID ?? ''
         }
         validation: {

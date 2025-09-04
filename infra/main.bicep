@@ -76,6 +76,35 @@ param azureAdTenantId string
 @description('Azure AD application (client) ID')
 param azureAdClientId string
 
+// Microsoft Sentinel Configuration
+@description('Enable Microsoft Sentinel on the Log Analytics workspace (Note: ~$2.50/GB ingested, DDNS functions not yet integrated)')
+param enableSentinel bool = false // Disabled by default - DDNS telemetry integration not yet implemented
+
+@description('Enable Sentinel analytics rules for DDNS threat detection')
+param enableSentinelAnalyticsRules bool = false
+
+@description('Enable Sentinel data connectors (Azure Activity, Security Events, etc.)')
+param enableSentinelDataConnectors bool = true
+
+// Note: UEBA is configured automatically when Sentinel is onboarded
+
+@description('Retention period for Sentinel data in days (90-730)')
+@minValue(90)
+@maxValue(730)
+param sentinelDataRetentionDays int = 90
+
+// Cost Management Parameters
+@description('Monthly budget limit for this environment in USD')
+@minValue(10)
+@maxValue(10000)
+param monthlyBudgetLimit int = 100
+
+@description('Email addresses to notify for budget alerts - comma separated')
+param budgetAlertEmails string = ''
+
+@description('Enable Azure spending budget with alerts')
+param enableBudget bool = true
+
 var abbrs = loadJsonContent('./abbreviations.json')
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
 var tags = { 'azd-env-name': environmentName }
@@ -150,6 +179,7 @@ module api './app/api.bicep' = {
       AZURE_AD_TENANT_ID: azureAdTenantId
       AZURE_AD_CLIENT_ID: azureAdClientId
       AZURE_STORAGE_ACCOUNT_NAME: storage.outputs.name
+      LOG_ANALYTICS_WORKSPACE_ID: logAnalytics.outputs.logAnalyticsWorkspaceId
     }
     virtualNetworkSubnetId: vnetEnabled ? serviceVirtualNetwork.outputs.appSubnetID : ''
   }
@@ -164,9 +194,9 @@ module keyVault 'br/public:avm/res/key-vault/vault:0.9.0' = {
     location: location
     tags: tags
     enableRbacAuthorization: true
-    enablePurgeProtection: false // Set to true for production
-    softDeleteRetentionInDays: 7
-    sku: 'standard'
+    enablePurgeProtection: false // COST: Set to true for production, false saves costs in dev
+    softDeleteRetentionInDays: 7 // COST: Minimum retention period
+    sku: 'standard' // COST: Standard SKU is more cost-effective than Premium
     secrets: [
       {
         name: 'ddns-username'
@@ -198,6 +228,9 @@ module storage 'br/public:avm/res/storage/storage-account:0.8.3' = {
   scope: rg
   params: {
     name: !empty(storageAccountName) ? storageAccountName : '${abbrs.storageStorageAccounts}${resourceToken}'
+    // COST OPTIMIZATION: Storage account settings
+    skuName: 'Standard_LRS' // COST: LRS is cheapest, suitable for non-critical data
+    kind: 'StorageV2'
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false // Disable local authentication methods as per policy
     dnsEndpointType: 'Standard'
@@ -277,7 +310,19 @@ module logAnalytics 'br/public:avm/res/operational-insights/workspace:0.11.1' = 
     name: !empty(logAnalyticsName) ? logAnalyticsName : '${abbrs.operationalInsightsWorkspaces}${resourceToken}'
     location: location
     tags: tags
-    dataRetention: 30
+    dataRetention: sentinelDataRetentionDays // COST: 90 days minimum for Sentinel, adjust for cost
+    // Enable Microsoft Sentinel on the Log Analytics workspace
+    onboardWorkspaceToSentinel: enableSentinel
+    // Add SecurityInsights solution for Sentinel
+    gallerySolutions: enableSentinel ? [
+      {
+        name: 'SecurityInsights(${!empty(logAnalyticsName) ? logAnalyticsName : '${abbrs.operationalInsightsWorkspaces}${resourceToken}'})'
+        plan: {
+          product: 'OMSGallery/SecurityInsights'
+          publisher: 'Microsoft'
+        }
+      }
+    ] : []
   }
 }
  
@@ -308,6 +353,38 @@ module dnsRbac './app/dns-rbac.bicep' = if (!empty(dnsSubscriptionId) && !empty(
   }
 }
 
+// Microsoft Sentinel Data Connectors and Analytics Rules
+// Deploy additional Sentinel components after workspace is onboarded
+module sentinelComponents './sentinel.bicep' = if (enableSentinel) {
+  name: '${uniqueString(deployment().name, location)}-sentinel'
+  scope: rg
+  params: {
+    logAnalyticsWorkspaceName: logAnalytics.outputs.name
+    enableAnalyticsRules: enableSentinelAnalyticsRules
+    enableDataConnectors: enableSentinelDataConnectors
+  }
+  dependsOn: [
+    monitoring
+    api
+  ]
+}
+
+// Parse comma-separated emails
+var budgetEmails = empty(budgetAlertEmails) ? [] : split(budgetAlertEmails, ',')
+
+// Azure Cost Management Budget - RESOURCE GROUP SCOPED
+// This deploys directly into the resource group so it appears in RG > Budgets view
+module budgetAlert './budget.bicep' = if (enableBudget && length(budgetEmails) > 0) {
+  name: '${uniqueString(deployment().name, location)}-budget'
+  scope: rg // Deploy TO the resource group, not at subscription level
+  params: {
+    budgetName: 'budget-${rg.name}-monthly'
+    budgetAmount: monthlyBudgetLimit
+    contactEmails: budgetEmails
+    // No resourceGroupName parameter needed - it's inherently scoped
+  }
+}
+
 // App outputs
 output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
@@ -316,3 +393,12 @@ output AZURE_FUNCTION_NAME string = api.outputs.SERVICE_API_NAME
 output KEY_VAULT_NAME string = keyVault.outputs.name
 output KEY_VAULT_URI string = keyVault.outputs.uri
 output STORAGE_ACCOUNT_NAME string = storage.outputs.name
+output LOG_ANALYTICS_WORKSPACE_NAME string = logAnalytics.outputs.name
+output LOG_ANALYTICS_WORKSPACE_ID string = logAnalytics.outputs.resourceId
+
+// Sentinel outputs
+output SENTINEL_ENABLED bool = enableSentinel
+output SENTINEL_WORKSPACE_NAME string = logAnalytics.outputs.name
+output SENTINEL_WORKSPACE_ID string = logAnalytics.outputs.resourceId
+output SENTINEL_ANALYTICS_RULES_ENABLED bool = enableSentinelAnalyticsRules
+output SENTINEL_DATA_CONNECTORS_ENABLED bool = enableSentinelDataConnectors

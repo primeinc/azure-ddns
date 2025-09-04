@@ -2,6 +2,8 @@ using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Azure.Monitor.Query;
+using Azure.Identity;
 using System;
 
 Console.WriteLine("====== AZURE DDNS FUNCTION APP STARTING ======");
@@ -22,6 +24,10 @@ var host = new HostBuilder()
         // Add custom services for DDNS functionality
         services.AddSingleton<Company.Function.Services.TableStorageService>();
         services.AddScoped<Company.Function.Services.ApiKeyService>();
+        services.AddScoped<Company.Function.Services.TelemetryHelper>();
+        
+        // Add Azure Monitor Query client for monitoring validation
+        services.AddSingleton(provider => new LogsQueryClient(new DefaultAzureCredential()));
     })
     .ConfigureLogging((context, logging) =>
     {
