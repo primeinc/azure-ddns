@@ -7,6 +7,10 @@ using System.Threading.Tasks;
 using System.Security.Claims;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
+using System.Net.Http;
+using System.Text.Json;
+using Microsoft.IdentityModel.Protocols;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 
 namespace Company.Function.Services
 {
@@ -17,6 +21,9 @@ namespace Company.Function.Services
         private readonly string _tenantId;
         private readonly string _clientId;
         private readonly string[] _scopes = new[] { "User.Read" };
+        private static readonly HttpClient _httpClient = new HttpClient();
+        private static IEnumerable<SecurityKey>? _cachedSigningKeys;
+        private static DateTime _cacheExpiry = DateTime.MinValue;
 
         public MsalAuthenticationService(ILogger<MsalAuthenticationService> logger)
         {
@@ -131,15 +138,49 @@ namespace Company.Function.Services
             return authorizationHeader.Substring("Bearer ".Length).Trim();
         }
 
-        private Task<IEnumerable<SecurityKey>> GetSigningKeysAsync()
+        private async Task<IEnumerable<SecurityKey>> GetSigningKeysAsync()
         {
-            // In production, you should cache these keys and refresh periodically
-            // For now, we'll use a simplified approach
-            var openIdConfigUrl = $"https://login.microsoftonline.com/{_tenantId}/v2.0/.well-known/openid-configuration";
-            
-            // This is a simplified version - in production, fetch and cache the signing keys
-            // from the OpenID configuration endpoint
-            return Task.FromResult<IEnumerable<SecurityKey>>(new List<SecurityKey>());
+            // Check if cached keys are still valid (cache for 24 hours)
+            if (_cachedSigningKeys != null && DateTime.UtcNow < _cacheExpiry)
+            {
+                _logger.LogDebug("Using cached signing keys");
+                return _cachedSigningKeys;
+            }
+
+            try
+            {
+                _logger.LogInformation("Fetching new signing keys from Azure AD");
+                
+                // Use the OpenID Connect configuration manager to fetch signing keys
+                var openIdConfigUrl = $"https://login.microsoftonline.com/{_tenantId}/v2.0/.well-known/openid-configuration";
+                var configurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
+                    openIdConfigUrl,
+                    new OpenIdConnectConfigurationRetriever(),
+                    new HttpDocumentRetriever(_httpClient));
+
+                var openIdConfig = await configurationManager.GetConfigurationAsync();
+                
+                // Cache the signing keys
+                _cachedSigningKeys = openIdConfig.SigningKeys;
+                _cacheExpiry = DateTime.UtcNow.AddHours(24);
+                
+                _logger.LogInformation($"Successfully fetched {openIdConfig.SigningKeys.Count} signing keys from Azure AD");
+                return openIdConfig.SigningKeys;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to fetch signing keys from Azure AD");
+                
+                // If we have cached keys but they're expired, use them as fallback
+                if (_cachedSigningKeys != null)
+                {
+                    _logger.LogWarning("Using expired cached signing keys as fallback");
+                    return _cachedSigningKeys;
+                }
+                
+                // Return empty collection as last resort
+                return new List<SecurityKey>();
+            }
         }
 
         public string GenerateAuthenticationUrl(string hostname)

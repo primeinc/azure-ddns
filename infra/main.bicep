@@ -122,6 +122,9 @@ param ddnsUsername string = ''
 @secure()
 param ddnsPassword string = ''
 
+@description('Semicolon-separated list of email domains for bootstrap admin access (e.g., "@domain1.com;@domain2.com")')
+param bootstrapAdminDomains string = ''
+
 var abbrs = loadJsonContent('./abbreviations.json')
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
 var tags = { 'azd-env-name': environmentName }
@@ -209,6 +212,7 @@ module api './app/api.bicep' = {
       AZURE_AD_CLIENT_ID: azureAdClientId
       AZURE_STORAGE_ACCOUNT_NAME: storage.outputs.name
       LOG_ANALYTICS_WORKSPACE_ID: logAnalytics.outputs.logAnalyticsWorkspaceId
+      BOOTSTRAP_ADMIN_DOMAINS: bootstrapAdminDomains  // Configurable admin domains for bootstrap access
     }
     virtualNetworkSubnetId: vnetEnabled ? serviceVirtualNetwork.outputs.appSubnetID : ''
     customDomainName: customDomainName

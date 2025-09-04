@@ -175,11 +175,26 @@ namespace Company.Function.Services
             // Method 2: Domain-based fallback for specific domains
             if (!string.IsNullOrEmpty(userEmail))
             {
-                var adminDomains = new[] { "@4pp.dev", "@yourdomain.com" };
-                if (adminDomains.Any(domain => userEmail.EndsWith(domain, StringComparison.OrdinalIgnoreCase)))
+                // Get admin domains from environment variable, fallback to empty if not set
+                var adminDomainsConfig = Environment.GetEnvironmentVariable("BOOTSTRAP_ADMIN_DOMAINS") ?? "";
+                
+                if (!string.IsNullOrEmpty(adminDomainsConfig))
                 {
-                    log.LogInformation($"[AUDIT-BOOTSTRAP-DOMAIN] User {userEmail} granted admin via domain membership");
-                    return true;
+                    // Split by semicolon and clean up each domain
+                    var adminDomains = adminDomainsConfig
+                        .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Select(d => d.StartsWith("@") ? d : "@" + d) // Ensure @ prefix
+                        .ToArray();
+                    
+                    if (adminDomains.Any(domain => userEmail.EndsWith(domain, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        log.LogInformation($"[AUDIT-BOOTSTRAP-DOMAIN] User {userEmail} granted admin via domain membership (configured domains: {string.Join(", ", adminDomains)})");
+                        return true;
+                    }
+                }
+                else
+                {
+                    log.LogDebug("[AUDIT-BOOTSTRAP] No BOOTSTRAP_ADMIN_DOMAINS configured, skipping domain-based admin check");
                 }
             }
 
