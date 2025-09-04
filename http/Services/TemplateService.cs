@@ -26,16 +26,19 @@ namespace Company.Function.Services
             _logger.LogInformation($"[TEMPLATE] Template base path: {_templateBasePath}");
         }
 
-        public async Task<string> RenderTemplateAsync(string templateName, Dictionary<string, object> model)
+        public async Task<string> RenderTemplateAsync(string templateName, object model)
         {
             try
             {
                 // Load template from cache or file
                 var template = await LoadTemplateAsync(templateName);
                 
+                // Convert model to dictionary
+                var modelDict = ConvertToDict(model);
+                
                 // Replace placeholders with values from the model
                 var result = template;
-                foreach (var kvp in model)
+                foreach (var kvp in modelDict)
                 {
                     var placeholder = $"{{{{{kvp.Key}}}}}";
                     var value = kvp.Value?.ToString() ?? string.Empty;
@@ -109,21 +112,38 @@ namespace Company.Function.Services
             }
         }
 
+        private Dictionary<string, object> ConvertToDict(object obj)
+        {
+            if (obj is Dictionary<string, object> dict)
+                return dict;
+                
+            var result = new Dictionary<string, object>();
+            var properties = obj.GetType().GetProperties();
+            
+            foreach (var prop in properties)
+            {
+                result[prop.Name] = prop.GetValue(obj);
+            }
+            
+            return result;
+        }
+
         /// <summary>
         /// Render a template with conditional sections
         /// </summary>
-        public async Task<string> RenderAdvancedTemplateAsync(string templateName, Dictionary<string, object> model)
+        public async Task<string> RenderAdvancedTemplateAsync(string templateName, object model)
         {
             var template = await LoadTemplateAsync(templateName);
+            var modelDict = ConvertToDict(model);
             
             // Process conditional sections first (e.g., {{#if AdminRole}}...{{/if}})
-            template = ProcessConditionals(template, model);
+            template = ProcessConditionals(template, modelDict);
             
             // Process loops (e.g., {{#each Items}}...{{/each}})
-            template = ProcessLoops(template, model);
+            template = ProcessLoops(template, modelDict);
             
             // Replace simple placeholders
-            foreach (var kvp in model)
+            foreach (var kvp in modelDict)
             {
                 var placeholder = $"{{{{{kvp.Key}}}}}";
                 var value = kvp.Value?.ToString() ?? string.Empty;

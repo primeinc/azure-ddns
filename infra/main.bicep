@@ -61,7 +61,7 @@ param principalId string = deployer().objectId
 
 // DNS Configuration for cross-subscription access
 @description('Subscription ID containing the DNS zone')
-param dnsSubscriptionId string
+param dnsSubscriptionId string = ''
 
 @description('Resource group containing the DNS zone')
 param dnsResourceGroupName string = 'domains-dns'
