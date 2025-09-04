@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "principalId": {
+      "value": "${AZURE_PRINCIPAL_ID}"
+    },
+    "vnetEnabled": {
+      "value": "${VNET_ENABLED=false}"
+    },
+    "dnsSubscriptionId": {
+      "value": "${DNS_SUBSCRIPTION_ID}"
+    },
+    "dnsResourceGroupName": {
+      "value": "${DNS_RESOURCE_GROUP_NAME=domains-dns}"
+    },
+    "dnsZoneName": {
+      "value": "${DNS_ZONE_NAME=title.dev}"
+    },
+    "monthlyBudgetLimit": {
+      "value": "${MONTHLY_BUDGET_LIMIT=50}"
+    },
+    "budgetAlertEmails": {
+      "value": "${BUDGET_ALERT_EMAILS=}"
+    },
+    "enableBudget": {
+      "value": "${ENABLE_BUDGET=false}"
+    },
+    "customDomainName": {
+      "value": "${customDomainName=}"
+    }
+  }
+}

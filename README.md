@@ -1,58 +1,177 @@
-# Azure DDNS
-Provides an Inadyn compatible  DynDNS2 API to be hosted by an Azure Function which uses an underlying Microsoft Azure hosted DNS Zone to maintain the IP address for a single A record.
+# Azure Dynamic DNS Service
 
-## Deploying the Provider
-Within the Microsoft Azure Function portal:
-1. Create a new Azure Function.
-2. Open the Configuration pane, and add the following application settings:
-    - _AppUsername_ - This is the username that will be required to use the public endpoint.
-    - _AppPassword_ - This is the password that will be required to use the public endpoint. 
-    - _DnsZoneRGName_ - This will need to contain the Resource Group Name for your DNS Zone.
-3. Open the Identity pane, and enable a System or User Assigned identity. This identity __MUST__ have `DNS Zone Contributor` role for the DNS Zone the provider will be responsible for modifying.
-4. Deploy this codebase into your Azure Function.
+> **⚠️ PROOF OF CONCEPT - NOT PRODUCTION READY**
+> 
+> This is an experimental implementation that demonstrates DDNS functionality with Azure Functions. 
+> It requires additional security hardening, testing, and operational features before production use.
+> Use at your own risk and expect breaking changes.
 
-NOTE: Because this provider uses Basic authentication, a colon (:) will not be supported as a character in the _AppPassword_ application setting.
+A modern Dynamic DNS (DDNS) service built on Azure Functions that provides DynDNS2 protocol compatibility for updating DNS records in Azure DNS zones. Features API key authentication, web-based management, and compatibility with UniFi Dream Machines and other routers.
 
-## Configuring the Inadyn Client
-The following file will need to be updated on the network device at the location: `/etc/inadyn.conf`. If you are using a device such as a Unifi Dream Machine or Dream Machine Pro, the file will instead be located at: `/run/ddns_eth{?}_inadyn.conf`.
+## 🚀 Features
+
+- **DynDNS2 Protocol Support**: Compatible with UniFi, Inadyn, ddclient, and other standard DDNS clients
+- **API Key Authentication**: Secure per-hostname API keys instead of shared credentials
+- **Web Management Interface**: Claim hostnames and manage API keys through a browser
+- **Azure DNS Integration**: Direct updates to Azure-hosted DNS zones
+- **Admin Panel**: Monitor all hostnames, users, and update statistics
+- **Cross-Subscription Support**: DNS zones can be in different subscriptions
+- **Modern Architecture**: .NET 8 isolated process on Flex Consumption plan
+
+## 🏗️ Architecture
+
+Built with:
+- **.NET 8**: Isolated process Azure Functions
+- **Azure DNS**: Native DNS zone management
+- **Azure Table Storage**: Hostname ownership and API key storage
+- **Azure AD/Entra ID**: User authentication for web interface
+- **Application Insights**: Monitoring and telemetry
+- **Bicep/Azure Developer CLI**: Infrastructure as Code
+
+## 📦 Quick Deploy
+
+### Prerequisites
+
+- Azure subscription
+- Azure DNS zone already configured
+- Azure Developer CLI (`azd`) installed
+- .NET 8 SDK installed
+
+### Deploy with Azure Developer CLI
+
+```bash
+# Clone the repository
+git clone https://github.com/primeinc/azure-ddns
+cd azure-ddns
+
+# Deploy to Azure
+azd up
+
+# Follow the prompts to configure:
+# - DNS subscription ID
+# - DNS resource group
+# - DNS zone name
+# - Azure AD configuration
+```
+
+## 🔧 Configuration
+
+### Environment Variables
+
+The function app requires these settings:
+
+| Setting | Description | Example |
+|---------|-------------|---------|
+| `DNS_SUBSCRIPTION_ID` | Subscription containing DNS zone | `uuid` |
+| `DNS_RESOURCE_GROUP` | Resource group with DNS zone | `rg-dns` |
+| `DNS_ZONE_NAME` | Azure DNS zone name | `example.com` |
+| `DDNS_SUBDOMAIN` | Subdomain for DDNS records | `ddns-sandbox` |
+| `AZURE_AD_TENANT_ID` | Azure AD tenant for auth | `uuid` |
+| `AZURE_AD_CLIENT_ID` | Azure AD app registration | `uuid` |
+
+## 📱 Usage
+
+### Web Interface (Claim & Manage Hostnames)
+
+1. Navigate to `https://your-function.azurewebsites.net/api/manage/device.ddns-sandbox.example.com`
+2. Sign in with Azure AD
+3. Claim the hostname if unclaimed
+4. Generate API keys for your devices
+5. View update history and statistics
+
+### Router Configuration
+
+#### UniFi Dream Machine
+
+1. Settings → Internet → WAN → Dynamic DNS
+2. Create new service:
+   - **Service**: `custom`
+   - **Hostname**: `device.ddns-sandbox.example.com`
+   - **Username**: `device` (hostname prefix)
+   - **Password**: Your API key
+   - **Server**: `your-function.azurewebsites.net/api/nic/update?hostname=%h&myip=%i`
+
+#### Inadyn
 
 ```conf
-custom your-ddns.azurewebsites.net:1 {
-    hostname    = "your.azuredomain.com"
-    username    = "REDACTED"
-    password    = "REDACTED"
-    ddns-server = "your-ddns.azurewebsites.net"
-    ddns-path   = "/nic/update?hostname=%h&myip=%i"
+custom your-function.azurewebsites.net {
+    hostname    = "device.ddns-sandbox.example.com"
+    username    = "device"
+    password    = "your-api-key"
+    ddns-server = "your-function.azurewebsites.net"
+    ddns-path   = "/api/nic/update?hostname=%h&myip=%i"
 }
 ```
 
-#### Provider Options
-- _hostname_: This __MUST__ be the FQDN of the DNS entry to update.
-- _username_: This __MUST__ match the username used in the _AppUsername_ application configuration setting.
-- _password_: This __MUST__ match the password used in the _AppPassword_ application configuration setting.
-- _ddns-server_: This is the location where the Azure Function has been deployed.
-- _ddns-path_: DO NOT CHANGE!
+### Command Line Testing
 
-## Testing
-To test this, you will need to have command line access to the device running the `inadyn.service`.
-```txt
-inadyn -1n --force --loglevel=DEBUG --config=/etc/inadyn.conf
+```bash
+# Update with API key
+curl -u "device:your-api-key" \
+  "https://your-function.azurewebsites.net/api/nic/update?hostname=device.ddns-sandbox.example.com&myip=auto"
+
+# Expected responses:
+# good - IP updated successfully
+# nochg - IP unchanged
+# badauth - Invalid API key
+# nohost - Hostname not found or not owned
 ```
 
-The following snippet shows what you should see on the Inadyn client logs when communicating with your DDNS service:
-```log
-inadyn[527119]: Sending alias table update to DDNS server: GET /nic/update?hostname=your.azuredomain.com&myip=REDACTED HTTP/1.0
-inadyn[527119]: Host: your-ddns.azurewebsites.net
-inadyn[527119]: Authorization: Basic REDACTED
-inadyn[527119]: User-Agent: inadyn/2.9.1 https://github.com/troglobit/inadyn/issues
-inadyn[527119]: Successfully sent HTTPS request!
-inadyn[527119]: Successfully received HTTPS response (205/8191 bytes)!
-inadyn[527119]: DDNS server response: HTTP/1.1 200 OK
-Connection: close
-Content-Type: text/plain; charset=utf-8
-Date: Sun, 31 Dec 2023 02:16:13 GMT
+## 🔐 Security Features
 
-good
-inadyn[527119]: Successful alias table update for your.azuredomain.com => new IP# REDACTED
-inadyn[527119]: Updating cache for your.azuredomain.com
+- **Per-hostname API keys**: Each hostname has unique keys
+- **Azure AD integration**: Web interface requires authentication
+- **Managed Identity**: No credentials in code
+- **Key Vault**: Secure storage for sensitive data
+- **Subdomain isolation**: Strict boundary enforcement
+- **Admin role-based access**: Separate admin panel with elevated permissions
+
+## 🛠️ Development
+
+### Local Development
+
+```bash
+cd http
+func start
+
+# Access locally at http://localhost:7071
 ```
+
+### Project Structure
+
+```
+azure-ddns/
+├── http/                   # .NET 8 Azure Functions
+│   ├── DdnsUpdateFunction.cs    # DDNS protocol endpoint
+│   ├── HostnameManagementFunction.cs  # Web management
+│   ├── AdminFunction.cs         # Admin panel
+│   └── Services/                # Business logic
+├── infra/                  # Bicep IaC templates
+│   ├── main.bicep         # Main infrastructure
+│   └── app/               # App-specific modules
+└── Templates/             # HTML templates
+```
+
+## 📊 Admin Panel
+
+Access at `/api/management` (requires Azure AD admin role):
+- View all registered hostnames
+- Monitor API key usage
+- Track update statistics
+- Manage user permissions
+
+## 🙏 Credits
+
+Inspired by the original [PowerShell Azure DDNS](https://github.com/jeff-winn/azure-ddns) implementation by [Jeff Winn](https://github.com/jeff-winn).
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE.md) for details.
+
+## 🤝 Contributing
+
+Contributions welcome! Please open an issue first to discuss proposed changes.
+
+## 🐛 Support
+
+For issues or questions, please open an issue on [GitHub](https://github.com/primeinc/azure-ddns/issues).

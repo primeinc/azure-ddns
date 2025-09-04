@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: azure-ddns
+metadata:
+  template: azure-ddns-multitenant@1.0.0
+services:
+  ddns:
+    project: ./http/
+    language: dotnet
+    host: function
+hooks:
+  postprovision:
+    windows:
+      shell: pwsh
+      run: echo "Post-provision completed successfully"
+    posix:
+      shell: sh
+      run: echo "Post-provision completed successfully"

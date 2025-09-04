@@ -1,0 +1,8 @@
+# Compiled Bicep files
+*.json
+!main.parameters.json
+!abbreviations.json
+!bicepconfig.json
+
+# Keep app-specific config files
+!app/bicepconfig.json

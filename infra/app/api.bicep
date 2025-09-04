@@ -1,0 +1,202 @@
+param name string
+@description('Primary location for all resources & Flex Consumption Function App')
+param location string = resourceGroup().location
+param tags object = {}
+param applicationInsightsName string = ''
+param appServicePlanId string
+param appSettings object = {}
+param runtimeName string 
+param runtimeVersion string 
+param serviceName string = 'api'
+param storageAccountName string
+param deploymentStorageContainerName string
+param virtualNetworkSubnetId string = ''
+// COST OPTIMIZATION: Flex Consumption plan settings
+@description('Memory allocation per instance in MB (512, 1024, 2048, 4096)')
+@allowed([512, 1024, 2048, 4096])
+param instanceMemoryMB int = 512 // COST: 512MB is sufficient for DDNS updates
+
+@description('Maximum number of instances for auto-scaling')
+@minValue(40)
+@maxValue(1000)
+param maximumInstanceCount int = 40 // COST: Minimum for Flex Consumption plan
+param identityId string = ''
+param identityClientId string = ''
+param enableBlob bool = true
+param enableQueue bool = false
+param enableTable bool = false
+param enableFile bool = false
+
+@allowed(['SystemAssigned', 'UserAssigned'])
+param identityType string = 'UserAssigned'
+
+@description('Custom domain name for the Function App (empty = no custom domain)')
+param customDomainName string = ''
+
+var applicationInsightsIdentity = 'ClientId=${identityClientId};Authorization=AAD'
+var kind = 'functionapp,linux'
+
+// Create base application settings as array for siteConfig.appSettings
+var baseAppSettingsArray = [
+  {
+    name: 'AzureWebJobsStorage__credential'
+    value: 'managedidentity'
+  }
+  {
+    name: 'AzureWebJobsStorage__clientId'
+    value: identityClientId
+  }
+  {
+    name: 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING'
+    value: applicationInsightsIdentity
+  }
+  {
+    name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+    value: applicationInsights.properties.ConnectionString
+  }
+]
+
+// Dynamically build storage endpoint settings based on feature flags
+var blobSettings = enableBlob ? [{ name: 'AzureWebJobsStorage__blobServiceUri', value: stg.properties.primaryEndpoints.blob }] : []
+var queueSettings = enableQueue ? [{ name: 'AzureWebJobsStorage__queueServiceUri', value: stg.properties.primaryEndpoints.queue }] : []
+var tableSettings = enableTable ? [{ name: 'AzureWebJobsStorage__tableServiceUri', value: stg.properties.primaryEndpoints.table }] : []
+var fileSettings = enableFile ? [{ name: 'AzureWebJobsStorage__fileServiceUri', value: stg.properties.primaryEndpoints.file }] : []
+
+// Convert custom appSettings object to array and merge with base
+var customAppSettingsArray = [for key in items(appSettings): { name: key.key, value: key.value }]
+var allAppSettingsArray = union(customAppSettingsArray, baseAppSettingsArray, blobSettings, queueSettings, tableSettings, fileSettings)
+
+resource stg 'Microsoft.Storage/storageAccounts@2022-09-01' existing = {
+  name: storageAccountName
+}
+
+resource applicationInsights 'Microsoft.Insights/components@2020-02-02' existing = if (!empty(applicationInsightsName)) {
+  name: applicationInsightsName
+}
+
+// Direct declaration of Function App (replaces AVM module for full control)
+resource api 'Microsoft.Web/sites@2023-12-01' = {
+  name: name
+  location: location
+  tags: union(tags, { 'azd-service-name': serviceName })
+  kind: kind
+  identity: {
+    type: identityType
+    userAssignedIdentities: identityType == 'UserAssigned' ? { '${identityId}': {} } : null
+  }
+  properties: {
+    serverFarmId: appServicePlanId
+    httpsOnly: true
+    keyVaultReferenceIdentity: identityType == 'UserAssigned' ? identityId : null  // Critical: Set this for user-assigned identity
+    virtualNetworkSubnetId: !empty(virtualNetworkSubnetId) ? virtualNetworkSubnetId : null
+    siteConfig: {
+      alwaysOn: false
+      appSettings: allAppSettingsArray  // Array format for settings including KV refs
+      minTlsVersion: '1.2'
+      ftpsState: 'Disabled'
+      http20Enabled: true
+      use32BitWorkerProcess: false
+      cors: {
+        allowedOrigins: ['https://portal.azure.com']
+      }
+      // Flex Consumption doesn't use minimumElasticInstanceCount or functionAppScaleLimit
+      // Scaling is controlled via functionAppConfig.scaleAndConcurrency
+    }
+    functionAppConfig: {
+      deployment: {
+        storage: {
+          type: 'blobContainer'
+          value: '${stg.properties.primaryEndpoints.blob}${deploymentStorageContainerName}'
+          authentication: {
+            type: identityType == 'SystemAssigned' ? 'SystemAssignedIdentity' : 'UserAssignedIdentity'
+            userAssignedIdentityResourceId: identityType == 'UserAssigned' ? identityId : null
+          }
+        }
+      }
+      scaleAndConcurrency: {
+        instanceMemoryMB: instanceMemoryMB
+        maximumInstanceCount: maximumInstanceCount
+      }
+      runtime: {
+        name: runtimeName
+        version: runtimeVersion
+      }
+    }
+  }
+}
+
+// Configure EasyAuth for Azure AD authentication
+resource auth 'Microsoft.Web/sites/config@2024-11-01' = {
+  name: 'authsettingsV2'
+  parent: api
+  properties: {
+    platform: {
+      enabled: true
+      runtimeVersion: '~1'
+    }
+    globalValidation: {
+      requireAuthentication: false
+      unauthenticatedClientAction: 'AllowAnonymous'
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          openIdIssuer: '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
+          clientId: appSettings.AZURE_AD_CLIENT_ID ?? ''
+        }
+        validation: {
+          allowedAudiences: [
+            appSettings.AZURE_AD_CLIENT_ID ?? ''
+            'api://${appSettings.AZURE_AD_CLIENT_ID ?? ''}'
+          ]
+        }
+      }
+    }
+    login: {
+      preserveUrlFragmentsForLogins: false
+      tokenStore: {
+        enabled: true
+      }
+    }
+  }
+}
+
+// STAGE 1: Bind custom hostname (no SSL yet; requires DNS verification)
+module hostnameBinding 'hostname-binding.bicep' = if (!empty(customDomainName)) {
+  name: 'bindHostname'
+  params: {
+    siteName: api.name
+    customDomainName: customDomainName
+  }
+}
+
+// STAGE 2: Issue managed cert (depends on binding)
+module managedCert 'managed-cert.bicep' = if (!empty(customDomainName)) {
+  name: 'issueCert'
+  params: {
+    location: location
+    customDomainName: customDomainName
+    appServicePlanId: appServicePlanId
+  }
+  dependsOn: [
+    hostnameBinding
+  ]
+}
+
+// STAGE 3: Update binding with SSL and thumbprint (depends on cert)
+module sslBinding 'ssl-binding.bicep' = if (!empty(customDomainName)) {
+  name: 'enableSsl'
+  params: {
+    siteName: api.name
+    customDomainName: customDomainName
+    certThumbprint: !empty(customDomainName) ? managedCert.outputs.thumbprint : ''
+  }
+}
+
+// Note: HTTPS enforcement will be handled separately via Azure CLI after SSL is configured
+
+output SERVICE_API_NAME string = api.name
+output SERVICE_API_IDENTITY_PRINCIPAL_ID string = identityType == 'SystemAssigned' ? api.identity.?principalId ?? '' : ''
+output CUSTOM_DOMAIN_NAME string = !empty(customDomainName) ? customDomainName : ''
+output CUSTOM_DOMAIN_CERTIFICATE_THUMBPRINT string = !empty(customDomainName) ? managedCert.outputs.thumbprint : ''
