@@ -10,7 +10,7 @@ namespace Company.Function.Services
 {
     public class ApiKeyService
     {
-        private readonly SecretClient _secretClient;
+        private readonly SecretClient? _secretClient;
         private readonly TableStorageService _tableStorage;
         private readonly ILogger<ApiKeyService> _logger;
 
@@ -26,7 +26,7 @@ namespace Company.Function.Services
             {
                 _logger.LogWarning("[INIT] Running in Development mode - Key Vault operations will be mocked");
                 // In development, we'll store keys in Table Storage only
-                _secretClient = null!; // Will check for null before using
+                _secretClient = null; // Properly using nullable reference type
             }
             else
             {

@@ -4,7 +4,7 @@ param logAnalyticsWorkspaceName string
 // Note: logAnalyticsWorkspaceId was removed as it's not needed - we use the existing resource by name
 
 @description('Enable Sentinel analytics rules for DDNS threat detection')
-param enableAnalyticsRules bool = false // Set to false by default, enable after Application Insights is sending data
+param enableAnalyticsRules bool = false // Set to false by default. Enable only after verifying Application Insights is sending DDNS authentication data (e.g., check the "traces" table in Log Analytics for recent DDNS events). See deployment guide for details.
 
 @description('Enable specific data connectors (Azure Activity, Security Events, etc.)')
 param enableDataConnectors bool = true

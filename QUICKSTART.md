@@ -1,13 +1,13 @@
 # Azure DDNS Quick Start Guide
 
 Your Azure DDNS service is deployed and running at:
-**https://func-api-cq3maraez745s.azurewebsites.net**
+**https://<YOUR_FUNCTION_APP_NAME>.azurewebsites.net**
 
 ## Available Endpoints
 
 ### 1. Claim a Hostname (Browser)
-Navigate to: `https://func-api-cq3maraez745s.azurewebsites.net/api/manage/{hostname}`
-- Example: `https://func-api-cq3maraez745s.azurewebsites.net/api/manage/mydevice`
+Navigate to: `https://<YOUR_FUNCTION_APP_NAME>.azurewebsites.net/api/manage/{hostname}`
+- Example: `https://<YOUR_FUNCTION_APP_NAME>.azurewebsites.net/api/manage/mydevice`
 - You'll be redirected to Azure AD login
 - After authentication, the hostname is claimed and you'll receive an API key
 
@@ -102,7 +102,7 @@ nslookup mydevice.title.dev
 Monitor your costs at:
 - **Resource Group Budget**: Azure Portal > rg-azure-ddns-dev > Cost Management > Budgets
 - **Current Month Costs**: Budget alerts at 50%, 75%, 90%, 100% of $50 limit
-- **Email Alerts**: Sent to will@4pp.dev, shelby@4pp.dev
+- **Email Alerts**: Sent to <your-admin-email@example.com>
 
 ## Troubleshooting
 
@@ -113,4 +113,4 @@ Monitor your costs at:
 
 ## Support
 
-Report issues at: https://github.com/your-org/azure-ddns/issues
+Report issues at: https://github.com/primeinc/azure-ddns/issues

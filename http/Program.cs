@@ -5,6 +5,8 @@ using Microsoft.Extensions.Logging;
 using Azure.Monitor.Query;
 using Azure.Identity;
 using System;
+using Company.Function;
+using Company.Function.Services;
 
 Console.WriteLine("====== AZURE DDNS FUNCTION APP STARTING ======");
 Console.WriteLine($"Start Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} UTC");
@@ -14,7 +16,7 @@ var host = new HostBuilder()
     .ConfigureFunctionsWebApplication(app =>
     {
         // Add custom middleware to fix header handling in .NET 8 Isolated Worker
-        app.UseMiddleware<Company.Function.ForwardedForHeaderMiddleware>();
+        app.UseMiddleware<ForwardedForHeaderMiddleware>();
     })
     .ConfigureServices(services =>
     {
@@ -22,9 +24,9 @@ var host = new HostBuilder()
         services.ConfigureFunctionsApplicationInsights();
         
         // Add custom services for DDNS functionality
-        services.AddSingleton<Company.Function.Services.TableStorageService>();
-        services.AddScoped<Company.Function.Services.ApiKeyService>();
-        services.AddScoped<Company.Function.Services.TelemetryHelper>();
+        services.AddSingleton<TableStorageService>();
+        services.AddScoped<ApiKeyService>();
+        services.AddScoped<TelemetryHelper>();
         
         // Add Azure Monitor Query client for monitoring validation
         services.AddSingleton(provider => new LogsQueryClient(new DefaultAzureCredential()));

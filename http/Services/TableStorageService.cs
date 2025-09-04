@@ -3,6 +3,7 @@ using Azure.Identity;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Company.Function.Services
@@ -43,29 +44,42 @@ namespace Company.Function.Services
             _apiKeysTable = _tableServiceClient.GetTableClient("ApiKeys");
             _updateHistoryTable = _tableServiceClient.GetTableClient("UpdateHistory");
             
-            // Ensure tables exist
-            Task.Run(async () => await InitializeTablesAsync()).Wait();
+            // Tables will be created on first use via EnsureInitializedAsync()
         }
 
-        private async Task InitializeTablesAsync()
+        private bool _tablesInitialized = false;
+        private readonly SemaphoreSlim _initializationSemaphore = new SemaphoreSlim(1, 1);
+
+        private async Task EnsureTablesInitializedAsync()
         {
+            if (_tablesInitialized) return;
+
+            await _initializationSemaphore.WaitAsync();
             try
             {
+                if (_tablesInitialized) return; // Double-check after acquiring lock
+
                 await _hostnameOwnershipTable.CreateIfNotExistsAsync();
                 await _apiKeysTable.CreateIfNotExistsAsync();
                 await _updateHistoryTable.CreateIfNotExistsAsync();
                 _logger.LogInformation("Table Storage initialized successfully");
+                _tablesInitialized = true;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to initialize Table Storage");
                 throw;
             }
+            finally
+            {
+                _initializationSemaphore.Release();
+            }
         }
 
         // Hostname Ownership Operations
         public async Task<bool> ClaimHostnameAsync(string hostname, string ownerPrincipalId, string ownerEmail)
         {
+            await EnsureTablesInitializedAsync();
             _logger.LogInformation($"[AUDIT] Attempting to claim hostname '{hostname}' for principal '{ownerPrincipalId}' with email '{ownerEmail}'");
             
             try
