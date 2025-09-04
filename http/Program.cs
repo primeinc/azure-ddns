@@ -41,7 +41,7 @@ var host = new HostBuilder()
         logging.SetMinimumLevel(LogLevel.Information);
         
         // Add filter for our namespace to ensure all logs are captured
-        logging.AddFilter("Company.Function", LogLevel.Debug);
+        logging.AddFilter(typeof(Program).Namespace ?? "Company.Function", LogLevel.Debug);
         
         Console.WriteLine("Logging configuration completed");
     })
