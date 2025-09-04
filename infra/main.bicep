@@ -76,6 +76,10 @@ param azureAdTenantId string
 @description('Azure AD application (client) ID')
 param azureAdClientId string
 
+// Custom Domain Configuration
+@description('Custom domain name for the Function App (e.g., ddns-sandbox.title.dev)')
+param customDomainName string = ''
+
 // Microsoft Sentinel Configuration
 @description('Enable Microsoft Sentinel on the Log Analytics workspace (Note: ~$2.50/GB ingested, DDNS functions not yet integrated)')
 param enableSentinel bool = false // Disabled by default - DDNS telemetry integration not yet implemented
@@ -182,6 +186,7 @@ module api './app/api.bicep' = {
       LOG_ANALYTICS_WORKSPACE_ID: logAnalytics.outputs.logAnalyticsWorkspaceId
     }
     virtualNetworkSubnetId: vnetEnabled ? serviceVirtualNetwork.outputs.appSubnetID : ''
+    customDomainName: customDomainName
   }
 }
 

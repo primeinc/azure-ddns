@@ -168,6 +168,17 @@ The system expects DNS zones to be hosted in Azure DNS:
 - Role assignments may take up to 10 minutes to propagate after deployment
 - If deployment fails with permission errors, verify you have role assignment permissions in the DNS subscription
 
+### DNS Permission Verification
+The cross-subscription DNS permissions are managed via deterministic GUID-based role assignments in Bicep:
+- `infra/app/dns-rbac.bicep` deploys to the DNS subscription scope
+- `infra/app/dns-role-assignment.bicep` creates two role assignments:
+  - **Reader** role on the DNS resource group (`domains-dns`)  
+  - **DNS Zone Contributor** role on the specific DNS zone (`title.dev`)
+- Role assignment names use `guid(scope, principalId, roleDefinitionId)` pattern for deterministic deployment
+- To verify permissions: `az role assignment list --all --assignee {managed-identity-principal-id} --query "[?contains(scope, 'title.dev')]"`
+
+**Current Status**: Managed identity `c0ba60e6-cf9e-4687-bdfe-ae567b5c11d3` has DNS Zone Contributor access to `title.dev` zone ✅
+
 ## Environment Variables Required
 
 For DDNS function (current PowerShell, future C#):
@@ -204,8 +215,20 @@ if (string.IsNullOrEmpty(userId))
 
 This pattern is implemented in:
 - ✅ `HostnameManagementFunction.cs` - `/api/manage/{hostname}`
-- ✅ `AdminFunction.cs` - `/api/admin/panel`
+- ✅ `AdminFunction.cs` - `/api/management` (route changed from `admin/panel` to `management`)
 - ❌ **Any new browser endpoints must follow this pattern**
+
+### Azure AD App Configuration (Current State)
+**Azure AD App ID**: `3109db3d-f7e7-4d55-ae7d-ac2170d1335c`
+
+**Current Redirect URIs**:
+- `http://localhost:7071/.auth/login/aad/callback` (local dev)
+- `http://localhost:7071/api/manage/callback` (local dev)
+- `https://func-api-cq3maraez745s.azurewebsites.net/.auth/login/aad/callback` (production)
+
+**Current URLs**:
+- **Homepage URL**: `https://func-api-cq3maraez745s.azurewebsites.net/`
+- **Logout URL**: `https://func-api-cq3maraez745s.azurewebsites.net/.auth/logout`
 
 ## Testing
 
@@ -237,3 +260,15 @@ The project uses Azure Developer CLI (`azd`) with:
 - Application Insights for monitoring
 
 Target regions must support Flex Consumption plan (see `infra/main.bicep` for allowed list).
+
+## Custom Domain Implementation Status
+
+### Phase 1: Pre-Flight Validation ✅ COMPLETED
+- **Target Environment**: `ddns-sandbox.title.dev` (sandbox), production will use `ddns.title.dev`
+- **Function App**: `https://func-api-cq3maraez745s.azurewebsites.net/` responds correctly
+- **EasyAuth**: Working properly - admin panel accessible with Azure AD authentication
+- **DNS Permissions**: Verified - managed identity has DNS Zone Contributor access to `title.dev`
+- **DNS Conflicts**: None - `ddns-sandbox` subdomain not in use
+
+### Phase 2-6: Implementation Pending
+Following comprehensive 6-phase deployment plan with validation gates to prevent common deployment failures.

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.36.1.42791",
-      "templateHash": "9249671502423890248"
+      "templateHash": "15501756434283833852"
     }
   },
   "parameters": {
@@ -135,11 +135,18 @@
         "description": "Azure AD application (client) ID"
       }
     },
+    "customDomainName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Custom domain name for the Function App (e.g., ddns-sandbox.title.dev)"
+      }
+    },
     "enableSentinel": {
       "type": "bool",
       "defaultValue": false,
       "metadata": {
-        "description": "Enable Microsoft Sentinel on the Log Analytics workspace - WARNING: Expensive! ~$2.50/GB"
+        "description": "Enable Microsoft Sentinel on the Log Analytics workspace (Note: ~$2.50/GB ingested, DDNS functions not yet integrated)"
       }
     },
     "enableSentinelAnalyticsRules": {
@@ -1411,7 +1418,10 @@
               "LOG_ANALYTICS_WORKSPACE_ID": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, if(not(empty(parameters('resourceGroupName'))), parameters('resourceGroupName'), format('{0}{1}', variables('abbrs').resourcesResourceGroups, parameters('environmentName')))), 'Microsoft.Resources/deployments', format('{0}-loganalytics', uniqueString(deployment().name, parameters('location')))), '2022-09-01').outputs.logAnalyticsWorkspaceId.value]"
             }
           },
-          "virtualNetworkSubnetId": "[if(parameters('vnetEnabled'), createObject('value', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, if(not(empty(parameters('resourceGroupName'))), parameters('resourceGroupName'), format('{0}{1}', variables('abbrs').resourcesResourceGroups, parameters('environmentName')))), 'Microsoft.Resources/deployments', 'serviceVirtualNetwork'), '2022-09-01').outputs.appSubnetID.value), createObject('value', ''))]"
+          "virtualNetworkSubnetId": "[if(parameters('vnetEnabled'), createObject('value', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, if(not(empty(parameters('resourceGroupName'))), parameters('resourceGroupName'), format('{0}{1}', variables('abbrs').resourcesResourceGroups, parameters('environmentName')))), 'Microsoft.Resources/deployments', 'serviceVirtualNetwork'), '2022-09-01').outputs.appSubnetID.value), createObject('value', ''))]",
+          "customDomainName": {
+            "value": "[parameters('customDomainName')]"
+          }
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -1420,7 +1430,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.36.1.42791",
-              "templateHash": "18120282981539516000"
+              "templateHash": "14149214768590187566"
             }
           },
           "parameters": {
@@ -1522,6 +1532,13 @@
                 "SystemAssigned",
                 "UserAssigned"
               ]
+            },
+            "customDomainName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Custom domain name for the Function App (empty = no custom domain)"
+              }
             }
           },
           "variables": {
@@ -1628,6 +1645,185 @@
               "dependsOn": [
                 "[resourceId('Microsoft.Web/sites', parameters('name'))]"
               ]
+            },
+            {
+              "condition": "[not(empty(parameters('customDomainName')))]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2022-09-01",
+              "name": "bindHostname",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "siteName": {
+                    "value": "[parameters('name')]"
+                  },
+                  "customDomainName": {
+                    "value": "[parameters('customDomainName')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.36.1.42791",
+                      "templateHash": "16865475209827434180"
+                    }
+                  },
+                  "parameters": {
+                    "siteName": {
+                      "type": "string"
+                    },
+                    "customDomainName": {
+                      "type": "string"
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Web/sites/hostNameBindings",
+                      "apiVersion": "2023-12-01",
+                      "name": "[format('{0}/{1}', parameters('siteName'), parameters('customDomainName'))]",
+                      "properties": {
+                        "customHostNameDnsRecordType": "CName",
+                        "hostNameType": "Verified"
+                      }
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('name'))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('customDomainName')))]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2022-09-01",
+              "name": "issueCert",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "customDomainName": {
+                    "value": "[parameters('customDomainName')]"
+                  },
+                  "appServicePlanId": {
+                    "value": "[parameters('appServicePlanId')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.36.1.42791",
+                      "templateHash": "9862357858642297678"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string"
+                    },
+                    "customDomainName": {
+                      "type": "string"
+                    },
+                    "appServicePlanId": {
+                      "type": "string"
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Web/certificates",
+                      "apiVersion": "2023-12-01",
+                      "name": "[format('cert-{0}', replace(parameters('customDomainName'), '.', '-'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "serverFarmId": "[parameters('appServicePlanId')]",
+                        "canonicalName": "[parameters('customDomainName')]"
+                      }
+                    }
+                  ],
+                  "outputs": {
+                    "thumbprint": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.Web/certificates', format('cert-{0}', replace(parameters('customDomainName'), '.', '-'))), '2023-12-01').thumbprint]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', 'bindHostname')]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('customDomainName')))]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2022-09-01",
+              "name": "enableSsl",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "siteName": {
+                    "value": "[parameters('name')]"
+                  },
+                  "customDomainName": {
+                    "value": "[parameters('customDomainName')]"
+                  },
+                  "certThumbprint": "[if(not(empty(parameters('customDomainName'))), createObject('value', reference(resourceId('Microsoft.Resources/deployments', 'issueCert'), '2022-09-01').outputs.thumbprint.value), createObject('value', ''))]"
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.36.1.42791",
+                      "templateHash": "3394911399879135728"
+                    }
+                  },
+                  "parameters": {
+                    "siteName": {
+                      "type": "string"
+                    },
+                    "customDomainName": {
+                      "type": "string"
+                    },
+                    "certThumbprint": {
+                      "type": "string"
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Web/sites/hostNameBindings",
+                      "apiVersion": "2023-12-01",
+                      "name": "[format('{0}/{1}', parameters('siteName'), parameters('customDomainName'))]",
+                      "properties": {
+                        "customHostNameDnsRecordType": "CName",
+                        "hostNameType": "Verified",
+                        "sslState": "SniEnabled",
+                        "thumbprint": "[parameters('certThumbprint')]"
+                      }
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('name'))]",
+                "[resourceId('Microsoft.Resources/deployments', 'issueCert')]"
+              ]
             }
           ],
           "outputs": {
@@ -1638,6 +1834,14 @@
             "SERVICE_API_IDENTITY_PRINCIPAL_ID": {
               "type": "string",
               "value": "[if(equals(parameters('identityType'), 'SystemAssigned'), coalesce(tryGet(reference(resourceId('Microsoft.Web/sites', parameters('name')), '2023-12-01', 'full').identity, 'principalId'), ''), '')]"
+            },
+            "CUSTOM_DOMAIN_NAME": {
+              "type": "string",
+              "value": "[if(not(empty(parameters('customDomainName'))), parameters('customDomainName'), '')]"
+            },
+            "CUSTOM_DOMAIN_CERTIFICATE_THUMBPRINT": {
+              "type": "string",
+              "value": "[if(not(empty(parameters('customDomainName'))), reference(resourceId('Microsoft.Resources/deployments', 'issueCert'), '2022-09-01').outputs.thumbprint.value, '')]"
             }
           }
         }
@@ -27097,7 +27301,7 @@
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
       "name": "[format('{0}-budget', uniqueString(deployment().name, parameters('location')))]",
-      "location": "[deployment().location]",
+      "resourceGroup": "[if(not(empty(parameters('resourceGroupName'))), parameters('resourceGroupName'), format('{0}{1}', variables('abbrs').resourcesResourceGroups, parameters('environmentName')))]",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -27112,19 +27316,16 @@
           },
           "contactEmails": {
             "value": "[variables('budgetEmails')]"
-          },
-          "resourceGroupName": {
-            "value": "[if(not(empty(parameters('resourceGroupName'))), parameters('resourceGroupName'), format('{0}{1}', variables('abbrs').resourcesResourceGroups, parameters('environmentName')))]"
           }
         },
         "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
           "contentVersion": "1.0.0.0",
           "metadata": {
             "_generator": {
               "name": "bicep",
               "version": "0.36.1.42791",
-              "templateHash": "1328518049675229148"
+              "templateHash": "3617529466816934633"
             }
           },
           "parameters": {
@@ -27146,12 +27347,6 @@
                 "description": "Contact emails for budget alerts"
               }
             },
-            "resourceGroupName": {
-              "type": "string",
-              "metadata": {
-                "description": "Resource group name to scope the budget to"
-              }
-            },
             "startDate": {
               "type": "string",
               "defaultValue": "[format('{0}-01T00:00:00Z', utcNow('yyyy-MM'))]",
@@ -27163,7 +27358,7 @@
           "resources": [
             {
               "type": "Microsoft.Consumption/budgets",
-              "apiVersion": "2023-11-01",
+              "apiVersion": "2024-08-01",
               "name": "[parameters('budgetName')]",
               "properties": {
                 "amount": "[parameters('budgetAmount')]",
@@ -27172,15 +27367,6 @@
                   "startDate": "[parameters('startDate')]"
                 },
                 "category": "Cost",
-                "filter": {
-                  "dimensions": {
-                    "name": "ResourceGroupName",
-                    "operator": "In",
-                    "values": [
-                      "[parameters('resourceGroupName')]"
-                    ]
-                  }
-                },
                 "notifications": {
                   "NotificationForExceededBudget1": {
                     "enabled": true,
@@ -27224,7 +27410,7 @@
           "outputs": {
             "budgetId": {
               "type": "string",
-              "value": "[subscriptionResourceId('Microsoft.Consumption/budgets', parameters('budgetName'))]"
+              "value": "[resourceId('Microsoft.Consumption/budgets', parameters('budgetName'))]"
             },
             "budgetName": {
               "type": "string",

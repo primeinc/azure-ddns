@@ -30,6 +30,9 @@ param enableFile bool = false
 @allowed(['SystemAssigned', 'UserAssigned'])
 param identityType string = 'UserAssigned'
 
+@description('Custom domain name for the Function App (empty = no custom domain)')
+param customDomainName string = ''
+
 var applicationInsightsIdentity = 'ClientId=${identityClientId};Authorization=AAD'
 var kind = 'functionapp,linux'
 
@@ -159,5 +162,41 @@ resource auth 'Microsoft.Web/sites/config@2024-11-01' = {
   }
 }
 
+// STAGE 1: Bind custom hostname (no SSL yet; requires DNS verification)
+module hostnameBinding 'hostname-binding.bicep' = if (!empty(customDomainName)) {
+  name: 'bindHostname'
+  params: {
+    siteName: api.name
+    customDomainName: customDomainName
+  }
+}
+
+// STAGE 2: Issue managed cert (depends on binding)
+module managedCert 'managed-cert.bicep' = if (!empty(customDomainName)) {
+  name: 'issueCert'
+  params: {
+    location: location
+    customDomainName: customDomainName
+    appServicePlanId: appServicePlanId
+  }
+  dependsOn: [
+    hostnameBinding
+  ]
+}
+
+// STAGE 3: Update binding with SSL and thumbprint (depends on cert)
+module sslBinding 'ssl-binding.bicep' = if (!empty(customDomainName)) {
+  name: 'enableSsl'
+  params: {
+    siteName: api.name
+    customDomainName: customDomainName
+    certThumbprint: !empty(customDomainName) ? managedCert.outputs.thumbprint : ''
+  }
+}
+
+// Note: HTTPS enforcement will be handled separately via Azure CLI after SSL is configured
+
 output SERVICE_API_NAME string = api.name
 output SERVICE_API_IDENTITY_PRINCIPAL_ID string = identityType == 'SystemAssigned' ? api.identity.?principalId ?? '' : ''
+output CUSTOM_DOMAIN_NAME string = !empty(customDomainName) ? customDomainName : ''
+output CUSTOM_DOMAIN_CERTIFICATE_THUMBPRINT string = !empty(customDomainName) ? managedCert.outputs.thumbprint : ''

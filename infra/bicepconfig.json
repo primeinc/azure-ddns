@@ -1,0 +1,6 @@
+{
+  "$schema": "https://aka.ms/bicep/config/v1",
+  "extensions": {
+    "graphV1": "br:mcr.microsoft.com/bicep/extensions/microsoftgraph/v1.0:1.0.0"
+  }
+}

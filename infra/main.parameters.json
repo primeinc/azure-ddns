@@ -37,6 +37,9 @@
     },
     "enableBudget": {
       "value": "${ENABLE_BUDGET=false}"
+    },
+    "customDomainName": {
+      "value": "${customDomainName=}"
     }
   }
 }
