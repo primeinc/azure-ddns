@@ -42,13 +42,57 @@ resource ddnsApp 'Microsoft.Graph/applications@v1.0' = {
       resourceAppId: '00000003-0000-0000-c000-000000000000'
       resourceAccess: [
         {
-          // User.Read
+          // User.Read (delegated)
           id: 'e1fe6dd8-ba31-4d61-89e7-88639da4683d'
           type: 'Scope'
+        }
+        {
+          // User.Read.All (application) - for admin panel to look up users
+          id: 'df021288-bdef-4463-88db-98f22de89214'
+          type: 'Role'
+        }
+        {
+          // AppRoleAssignment.ReadWrite.All (application) - for admin panel to manage role assignments
+          id: '06b708a9-e830-4db3-a914-8e69da51d44f'
+          type: 'Role'
         }
       ]
     }
   ]
+  appRoles: [
+    {
+      id: '12345678-1234-1234-1234-123456789001'
+      displayName: 'DDNS Administrator'
+      value: 'DDNSAdmin'
+      description: 'Can manage all hostnames, API keys, and user permissions'
+      allowedMemberTypes: ['User']
+      isEnabled: true
+    }
+    {
+      id: '12345678-1234-1234-1234-123456789002'
+      displayName: 'Hostname Owner'
+      value: 'HostnameOwner'
+      description: 'Can manage their own claimed hostnames and API keys'
+      allowedMemberTypes: ['User']
+      isEnabled: true
+    }
+  ]
+  optionalClaims: {
+    idToken: [
+      {
+        name: 'wids'
+        source: null
+        essential: false
+      }
+    ]
+    accessToken: [
+      {
+        name: 'wids'
+        source: null
+        essential: false
+      }
+    ]
+  }
 }
 
 // Ensure a service principal exists for the app
