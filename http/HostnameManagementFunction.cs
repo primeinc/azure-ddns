@@ -57,6 +57,22 @@ namespace Company.Function
 
                 _logger.LogInformation($"[AUDIT-MANAGE] Authenticated user {userEmail} (ID: {userId}) accessing hostname {hostname}");
 
+                // Auto-redirect to full FQDN if not already provided
+                var ddnsSubdomain = Environment.GetEnvironmentVariable("DDNS_SUBDOMAIN");
+                var dnsZoneName = Environment.GetEnvironmentVariable("DNS_ZONE_NAME");
+                
+                // Only redirect if we have the configuration and hostname is not already a FQDN
+                if (!string.IsNullOrEmpty(ddnsSubdomain) && !string.IsNullOrEmpty(dnsZoneName) && !hostname.Contains("."))
+                {
+                    // Build the full FQDN: {hostname}.{ddnsSubdomain}.{dnsZoneName}
+                    var fullHostname = $"{hostname}.{ddnsSubdomain}.{dnsZoneName}";
+                    _logger.LogInformation($"[AUDIT-MANAGE] Redirecting short hostname '{hostname}' to full FQDN '{fullHostname}'");
+                    
+                    var redirectResponse = req.CreateResponse(System.Net.HttpStatusCode.PermanentRedirect);
+                    redirectResponse.Headers.Add("Location", $"/api/manage/{fullHostname}");
+                    return redirectResponse;
+                }
+
             // Check if hostname is already claimed
             var existingOwnerPrincipalId = await _tableStorage.GetHostnameOwnerAsync(hostname);
             
