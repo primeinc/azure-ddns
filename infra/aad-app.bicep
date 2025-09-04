@@ -61,7 +61,7 @@ resource ddnsApp 'Microsoft.Graph/applications@v1.0' = {
   ]
   appRoles: [
     {
-      id: '12345678-1234-1234-1234-123456789001'
+      id: guid('DDNSAdmin', appUniqueName, 'role')
       displayName: 'DDNS Administrator'
       value: 'DDNSAdmin'
       description: 'Can manage all hostnames, API keys, and user permissions'
@@ -69,7 +69,7 @@ resource ddnsApp 'Microsoft.Graph/applications@v1.0' = {
       isEnabled: true
     }
     {
-      id: '12345678-1234-1234-1234-123456789002'
+      id: guid('HostnameOwner', appUniqueName, 'role')
       displayName: 'Hostname Owner'
       value: 'HostnameOwner'
       description: 'Can manage their own claimed hostnames and API keys'

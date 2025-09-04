@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{#if IsOwner}}Manage {{Hostname}}{{else}}Claim {{Hostname}}{{/if}}</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 800px;
+            margin: 50px auto;
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 {
+            color: #2d3748;
+            margin: 0 0 10px 0;
+            font-size: 2.5em;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 600;
+            margin-bottom: 30px;
+        }
+        .status-badge.active {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+        .status-badge.unclaimed {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+        .info-card {
+            background: #f7fafc;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 20px 0;
+            border: 1px solid #e2e8f0;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .info-row:last-child {
+            border-bottom: none;
+        }
+        .info-label {
+            color: #718096;
+            font-weight: 600;
+        }
+        .info-value {
+            color: #2d3748;
+            font-family: 'Courier New', monospace;
+        }
+        .button {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            margin: 10px 10px 10px 0;
+            border: none;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+        .button.success {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+        }
+        .button.danger {
+            background: linear-gradient(135deg, #f56565 0%, #ed8936 100%);
+        }
+        .button.secondary {
+            background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+        }
+        .api-key-card {
+            background: #edf2f7;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 20px 0;
+            border: 2px solid #cbd5e0;
+        }
+        .api-key {
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            color: #2d3748;
+            word-break: break-all;
+            padding: 10px;
+            background: white;
+            border-radius: 6px;
+            margin: 10px 0;
+        }
+        .code-example {
+            background: #2d3748;
+            color: #48bb78;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            overflow-x: auto;
+            margin: 15px 0;
+        }
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        .history-table th {
+            background: #edf2f7;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #2d3748;
+            border-bottom: 2px solid #cbd5e0;
+        }
+        .history-table td {
+            padding: 12px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #4a5568;
+        }
+        .history-table tr:hover {
+            background: #f7fafc;
+        }
+        .claim-container {
+            text-align: center;
+            padding: 40px 0;
+        }
+        .claim-icon {
+            font-size: 72px;
+            margin-bottom: 20px;
+        }
+        .claim-text {
+            color: #4a5568;
+            font-size: 1.2em;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        {{#if IsOwner}}
+            <h1>🌐 {{Hostname}}</h1>
+            <span class="status-badge active">Active</span>
+            
+            <div class="info-card">
+                <h3>Hostname Information</h3>
+                <div class="info-row">
+                    <span class="info-label">Owner:</span>
+                    <span class="info-value">{{OwnerEmail}}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Current IP:</span>
+                    <span class="info-value">{{CurrentIp}}{{#unless CurrentIp}}Not set{{/unless}}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Last Updated:</span>
+                    <span class="info-value">{{LastUpdated}}{{#unless LastUpdated}}Never{{/unless}}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Total Updates:</span>
+                    <span class="info-value">{{TotalUpdates}}</span>
+                </div>
+            </div>
+            
+            {{#if ApiKeys.length}}
+            <div class="info-card">
+                <h3>API Keys</h3>
+                <p style="color: #718096;">You have {{ApiKeys.length}} active API key(s)</p>
+                {{#each ApiKeys}}
+                <div class="api-key-card">
+                    <div class="info-row">
+                        <span class="info-label">Key Hash:</span>
+                        <span class="info-value">{{this.KeyHashShort}}...</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Created:</span>
+                        <span class="info-value">{{this.Created}}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Last Used:</span>
+                        <span class="info-value">{{this.LastUsed}}{{#unless this.LastUsed}}Never{{/unless}}</span>
+                    </div>
+                </div>
+                {{/each}}
+            </div>
+            {{else}}
+            <div class="info-card" style="text-align: center;">
+                <p style="color: #718096;">No API keys generated yet</p>
+            </div>
+            {{/if}}
+            
+            <div class="info-card">
+                <h3>Quick Update Commands</h3>
+                <p style="color: #718096;">Use these commands to update your DNS record:</p>
+                
+                <p><strong>Using curl:</strong></p>
+                <div class="code-example">curl -u "{{SimpleHostname}}:YOUR_API_KEY" "{{BaseUrl}}/api/nic/update?hostname={{Hostname}}&myip=auto"</div>
+                
+                <p><strong>Using wget:</strong></p>
+                <div class="code-example">wget --auth-no-challenge --user={{SimpleHostname}} --password=YOUR_API_KEY "{{BaseUrl}}/api/nic/update?hostname={{Hostname}}&myip=auto"</div>
+            </div>
+            
+            {{#if UpdateHistory.length}}
+            <div class="info-card">
+                <h3>Recent Updates</h3>
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>IP Address</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{#each UpdateHistory}}
+                        <tr>
+                            <td>{{this.Timestamp}}</td>
+                            <td style="font-family: 'Courier New', monospace;">{{this.IpAddress}}</td>
+                            <td>{{this.Status}}</td>
+                        </tr>
+                        {{/each}}
+                    </tbody>
+                </table>
+            </div>
+            {{/if}}
+            
+            <div style="margin-top: 30px;">
+                <a href="/api/manage/{{SimpleHostname}}/newkey" class="button success">Generate New API Key</a>
+                {{#if ApiKeys.length}}
+                <a href="/api/manage/{{SimpleHostname}}/revokeall" class="button danger" 
+                   onclick="return confirm('This will revoke ALL API keys. All devices will need new keys. Continue?')">
+                   Revoke All Keys
+                </a>
+                {{/if}}
+                <a href="/api/management" class="button secondary">Admin Panel</a>
+            </div>
+        {{else}}
+            <div class="claim-container">
+                <div class="claim-icon">🔐</div>
+                <h1>Claim {{Hostname}}</h1>
+                <span class="status-badge unclaimed">Unclaimed</span>
+                
+                <p class="claim-text">
+                    This hostname is available!<br>
+                    Click the button below to claim it and start using it for your dynamic DNS needs.
+                </p>
+                
+                <form method="POST">
+                    <input type="hidden" name="action" value="claim">
+                    <button type="submit" class="button success" style="font-size: 1.2em; padding: 15px 30px;">
+                        Claim This Hostname
+                    </button>
+                </form>
+                
+                <p style="color: #718096; margin-top: 30px;">
+                    Once claimed, you'll receive an API key to update this hostname's DNS record.
+                </p>
+            </div>
+        {{/if}}
+    </div>
+</body>
+</html>

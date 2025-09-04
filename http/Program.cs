@@ -27,7 +27,7 @@ var host = new HostBuilder()
         services.AddSingleton<TableStorageService>();
         services.AddScoped<ApiKeyService>();
         services.AddScoped<TelemetryHelper>();
-        services.AddScoped<TemplateService>();
+        services.AddSingleton<TemplateService>();
         
         // Add Azure Monitor Query client for monitoring validation
         services.AddSingleton(provider => new LogsQueryClient(new DefaultAzureCredential()));

@@ -273,4 +273,3 @@ paket-files/
 __pycache__/
 *.pyc
 .azure
-.claude/settings.local.json

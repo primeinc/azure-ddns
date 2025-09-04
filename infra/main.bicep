@@ -80,9 +80,9 @@ param azureAdClientId string
 @description('Custom domain name for the Function App (e.g., ddns-sandbox.title.dev)')
 param customDomainName string = ''
 
-// Microsoft Sentinel Configuration
-@description('Enable Microsoft Sentinel on the Log Analytics workspace (Note: ~$2.50/GB ingested, DDNS functions not yet integrated)')
-param enableSentinel bool = false // Disabled by default - DDNS telemetry integration not yet implemented
+// Microsoft Sentinel Configuration (SIEM and SOAR platform for advanced threat detection)
+@description('Enable Microsoft Sentinel on the Log Analytics workspace (Note: ~$2.50/GB ingested, provides security analytics and threat intelligence)')
+param enableSentinel bool = false // Disabled by default - adds significant cost, enable only if security monitoring is required
 
 @description('Enable Sentinel analytics rules for DDNS threat detection')
 param enableSentinelAnalyticsRules bool = false

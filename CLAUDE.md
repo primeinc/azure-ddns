@@ -177,7 +177,7 @@ The cross-subscription DNS permissions are managed via deterministic GUID-based 
 - Role assignment names use `guid(scope, principalId, roleDefinitionId)` pattern for deterministic deployment
 - To verify permissions: `az role assignment list --all --assignee {managed-identity-principal-id} --query "[?contains(scope, 'title.dev')]"`
 
-**Current Status**: Managed identity `c0ba60e6-cf9e-4687-bdfe-ae567b5c11d3` has DNS Zone Contributor access to `title.dev` zone ✅
+**Current Status**: Managed identity `{managed-identity-principal-id}` has DNS Zone Contributor access to `title.dev` zone ✅
 
 ## Environment Variables Required
 
@@ -219,16 +219,16 @@ This pattern is implemented in:
 - ❌ **Any new browser endpoints must follow this pattern**
 
 ### Azure AD App Configuration (Current State)
-**Azure AD App ID**: `3109db3d-f7e7-4d55-ae7d-ac2170d1335c`
+**Azure AD App ID**: `{azure-ad-app-id}`
 
 **Current Redirect URIs**:
 - `http://localhost:7071/.auth/login/aad/callback` (local dev)
 - `http://localhost:7071/api/manage/callback` (local dev)
-- `https://func-api-cq3maraez745s.azurewebsites.net/.auth/login/aad/callback` (production)
+- `https://{your-function-app-name}.azurewebsites.net/.auth/login/aad/callback` (production)
 
 **Current URLs**:
-- **Homepage URL**: `https://func-api-cq3maraez745s.azurewebsites.net/`
-- **Logout URL**: `https://func-api-cq3maraez745s.azurewebsites.net/.auth/logout`
+- **Homepage URL**: `https://{your-function-app-name}.azurewebsites.net/`
+- **Logout URL**: `https://{your-function-app-name}.azurewebsites.net/.auth/logout`
 
 ## Testing
 
@@ -265,7 +265,7 @@ Target regions must support Flex Consumption plan (see `infra/main.bicep` for al
 
 ### Phase 1: Pre-Flight Validation ✅ COMPLETED
 - **Target Environment**: `ddns-sandbox.title.dev` (sandbox), production will use `ddns.title.dev`
-- **Function App**: `https://func-api-cq3maraez745s.azurewebsites.net/` responds correctly
+- **Function App**: `https://{your-function-app-name}.azurewebsites.net/` responds correctly
 - **EasyAuth**: Working properly - admin panel accessible with Azure AD authentication
 - **DNS Permissions**: Verified - managed identity has DNS Zone Contributor access to `title.dev`
 - **DNS Conflicts**: None - `ddns-sandbox` subdomain not in use
