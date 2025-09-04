@@ -177,6 +177,36 @@ For DDNS function (current PowerShell, future C#):
 - `DnsZoneName`: Azure DNS zone name (e.g., `example.com`)
 - `DdnsSubdomain`: Subdomain for DDNS records (e.g., `ddns` for `*.ddns.example.com`)
 
+## Authentication Requirements
+
+**CRITICAL**: All browser-accessible endpoints MUST implement manual EasyAuth redirect logic because:
+
+1. EasyAuth is configured with `globalValidation.requireAuthentication: false` and `unauthenticatedClientAction: 'AllowAnonymous'`
+2. This means EasyAuth headers are only provided AFTER a manual redirect to `/.auth/login/aad`
+3. Without this redirect, functions receive no authentication headers and must handle unauthenticated requests
+
+**Required pattern for all browser endpoints:**
+```csharp
+var (userId, userEmail) = AuthenticationHelper.GetUserFromHeaders(req, _logger);
+
+if (string.IsNullOrEmpty(userId))
+{
+    // No authentication, redirect to Azure AD login via EasyAuth
+    var response = req.CreateResponse(System.Net.HttpStatusCode.Redirect);
+    var encodedRedirect = Uri.EscapeDataString("/api/your/route");
+    var redirectUrl = $"https://{req.Url.Host}/.auth/login/aad?post_login_redirect_url={encodedRedirect}";
+    response.Headers.Add("Location", redirectUrl);
+    return response;
+}
+
+// User is now authenticated, proceed with function logic
+```
+
+This pattern is implemented in:
+- ✅ `HostnameManagementFunction.cs` - `/api/manage/{hostname}`
+- ✅ `AdminFunction.cs` - `/api/admin/panel`
+- ❌ **Any new browser endpoints must follow this pattern**
+
 ## Testing
 
 ```bash

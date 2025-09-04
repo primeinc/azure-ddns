@@ -19,7 +19,7 @@ namespace Company.Function
 
         [Function("AdminPanel")]
         public async Task<HttpResponseData> AdminPanel(
-            [HttpTrigger(AuthorizationLevel.Function, "get", "post", Route = "management")] HttpRequestData req)
+            [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = "management")] HttpRequestData req)
         {
             _logger.LogInformation("[AUDIT-ADMIN] Admin panel accessed");
 
@@ -29,10 +29,14 @@ namespace Company.Function
 
             if (string.IsNullOrEmpty(userId))
             {
-                _logger.LogError("[AUDIT-ADMIN] EasyAuth failed - no user ID in headers");
-                var errorResponse = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
-                await errorResponse.WriteStringAsync("Authentication system error");
-                return errorResponse;
+                // No authentication, redirect to Azure AD login via EasyAuth
+                _logger.LogInformation("[AUDIT-ADMIN] No authentication for admin panel, redirecting to EasyAuth login");
+                var response = req.CreateResponse(System.Net.HttpStatusCode.Redirect);
+                var encodedRedirect = Uri.EscapeDataString("/api/management");
+                var redirectUrl = $"https://{req.Url.Host}/.auth/login/aad?post_login_redirect_url={encodedRedirect}";
+                _logger.LogInformation($"[AUDIT-REDIRECT] Redirecting to: {redirectUrl}");
+                response.Headers.Add("Location", redirectUrl);
+                return response;
             }
 
             // Check if user is admin or bootstrap admin (tenant admin, etc.)
@@ -65,6 +69,9 @@ namespace Company.Function
             var totalHostnames = await GetTotalHostnames();
             var totalUsers = await GetTotalUsers();
             var totalApiKeys = await GetTotalApiKeys();
+            
+            // Get system health status
+            var healthStatus = await GetSystemHealthStatus(req);
 
             var html = $@"
 <!DOCTYPE html>
@@ -151,15 +158,14 @@ namespace Company.Function
         <div class='form-section'>
             <h2>🎯 Quick Actions</h2>
             <p>Coming soon: User role management, hostname transfers, bulk operations...</p>
-            <p><strong>Bootstrap Admin:</strong> You currently have admin access via domain membership. 
-               Ask another admin to assign you the 'DDNS Administrator' role for permanent access.</p>
+            <p><strong>Admin Status:</strong> {healthStatus.adminStatus}</p>
         </div>
 
         <div class='form-section'>
             <h2>📊 System Health</h2>
-            <p>✅ Table Storage: Connected</p>
-            <p>✅ Authentication: Azure AD</p>
-            <p>✅ DNS Integration: Active</p>
+            <p>{(healthStatus.tableStorage ? "✅" : "❌")} Table Storage: {(healthStatus.tableStorage ? "Connected" : "Connection Failed")}</p>
+            <p>{(healthStatus.authentication ? "✅" : "❌")} Authentication: {(healthStatus.authentication ? "Azure AD Active" : "Authentication Failed")}</p>
+            <p>{(healthStatus.dnsIntegration ? "✅" : "❌")} DNS Integration: {(healthStatus.dnsIntegration ? "Configuration Found" : "Missing DNS Configuration")}</p>
         </div>
 
         <div class='form-section'>
@@ -189,12 +195,11 @@ namespace Company.Function
         {
             try
             {
-                // Query hostname ownership table for count
-                // This is a simplified version - you might want to add proper counting
-                return 42; // Placeholder
+                return await _tableStorage.GetTotalHostnamesAsync();
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogError(ex, "[ADMIN-ERROR] Failed to get total hostnames count");
                 return 0;
             }
         }
@@ -203,11 +208,11 @@ namespace Company.Function
         {
             try
             {
-                // Count unique users from hostname ownership
-                return 13; // Placeholder  
+                return await _tableStorage.GetTotalUsersAsync();
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogError(ex, "[ADMIN-ERROR] Failed to get total users count");
                 return 0;
             }
         }
@@ -216,13 +221,57 @@ namespace Company.Function
         {
             try
             {
-                // Count active API keys
-                return 28; // Placeholder
+                return await _tableStorage.GetTotalActiveApiKeysAsync();
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogError(ex, "[ADMIN-ERROR] Failed to get total API keys count");
                 return 0;
             }
+        }
+
+        private async Task<(bool tableStorage, bool authentication, bool dnsIntegration, string adminStatus)> GetSystemHealthStatus(HttpRequestData req)
+        {
+            // Test Table Storage connection
+            var tableStorageHealthy = await _tableStorage.TestConnectionAsync();
+
+            // Test authentication - we're already authenticated if we got here
+            var authHealthy = true;
+
+            // Test DNS integration - check if we can access environment variables for DNS
+            var dnsZoneName = Environment.GetEnvironmentVariable("DnsZoneName");
+            var dnsZoneRG = Environment.GetEnvironmentVariable("DnsZoneRGName");
+            var dnsHealthy = !string.IsNullOrEmpty(dnsZoneName) && !string.IsNullOrEmpty(dnsZoneRG);
+
+            // Get real admin status
+            var (userId, userEmail) = AuthenticationHelper.GetUserFromHeaders(req, _logger);
+            var userRoles = AuthenticationHelper.GetUserRoles(req, _logger);
+            var hasAppRole = userRoles.Contains("DDNSAdmin");
+            var isBootstrapAdmin = AuthenticationHelper.IsBootstrapAdmin(req, _logger);
+            
+            string adminStatus;
+            if (hasAppRole)
+            {
+                adminStatus = "✅ You have the 'DDNS Administrator' application role assigned.";
+            }
+            else if (isBootstrapAdmin)
+            {
+                var tenantRoles = AuthenticationHelper.GetTenantAdminRoles(req, _logger);
+                if (tenantRoles.Any())
+                {
+                    adminStatus = $"🔑 Bootstrap Admin via tenant roles: {string.Join(", ", tenantRoles)}. Ask another admin to assign you the 'DDNS Administrator' role for permanent access.";
+                }
+                else
+                {
+                    adminStatus = "🔑 Bootstrap Admin via domain membership. Ask another admin to assign you the 'DDNS Administrator' role for permanent access.";
+                }
+            }
+            else
+            {
+                adminStatus = "❌ No admin access detected.";
+            }
+
+            return (tableStorageHealthy, authHealthy, dnsHealthy, adminStatus);
         }
     }
 }

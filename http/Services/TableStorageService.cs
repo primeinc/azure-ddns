@@ -399,5 +399,108 @@ namespace Company.Function.Services
             return history;
         }
 
+        // Admin Statistics Methods
+        public async Task<int> GetTotalHostnamesAsync()
+        {
+            try
+            {
+                _logger.LogDebug("[ADMIN-STATS] Counting total hostnames");
+                var hostnames = new HashSet<string>();
+                
+                var response = _hostnameOwnershipTable.QueryAsync<TableEntity>(
+                    select: new[] { "PartitionKey" });
+                
+                await foreach (var entity in response)
+                {
+                    hostnames.Add(entity.PartitionKey);
+                }
+                
+                _logger.LogInformation($"[ADMIN-STATS] Found {hostnames.Count} unique hostnames");
+                return hostnames.Count;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[ADMIN-STATS] Failed to count hostnames");
+                return 0;
+            }
+        }
+
+        public async Task<int> GetTotalUsersAsync()
+        {
+            try
+            {
+                _logger.LogDebug("[ADMIN-STATS] Counting unique users");
+                var users = new HashSet<string>();
+                
+                var response = _hostnameOwnershipTable.QueryAsync<TableEntity>(
+                    select: new[] { "RowKey" });
+                
+                await foreach (var entity in response)
+                {
+                    users.Add(entity.RowKey); // RowKey is the ownerPrincipalId
+                }
+                
+                _logger.LogInformation($"[ADMIN-STATS] Found {users.Count} unique users");
+                return users.Count;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[ADMIN-STATS] Failed to count users");
+                return 0;
+            }
+        }
+
+        public async Task<int> GetTotalActiveApiKeysAsync()
+        {
+            try
+            {
+                _logger.LogDebug("[ADMIN-STATS] Counting active API keys");
+                int count = 0;
+                
+                var response = _apiKeysTable.QueryAsync<TableEntity>(
+                    filter: "IsActive eq true",
+                    select: new[] { "PartitionKey" });
+                
+                await foreach (var entity in response)
+                {
+                    count++;
+                }
+                
+                _logger.LogInformation($"[ADMIN-STATS] Found {count} active API keys");
+                return count;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[ADMIN-STATS] Failed to count active API keys");
+                return 0;
+            }
+        }
+
+        public async Task<bool> TestConnectionAsync()
+        {
+            try
+            {
+                _logger.LogDebug("[ADMIN-HEALTH] Testing Table Storage connection");
+                
+                // Try to query a single entity from each table to test connectivity
+                var hostnameTest = _hostnameOwnershipTable.QueryAsync<TableEntity>(maxPerPage: 1);
+                var apiKeyTest = _apiKeysTable.QueryAsync<TableEntity>(maxPerPage: 1);
+                var historyTest = _updateHistoryTable.QueryAsync<TableEntity>(maxPerPage: 1);
+                
+                // Test each table connection
+                await foreach (var _ in hostnameTest) { break; }
+                await foreach (var _ in apiKeyTest) { break; }
+                await foreach (var _ in historyTest) { break; }
+                
+                _logger.LogInformation("[ADMIN-HEALTH] Table Storage connection test successful");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[ADMIN-HEALTH] Table Storage connection test failed");
+                return false;
+            }
+        }
+
     }
 }
