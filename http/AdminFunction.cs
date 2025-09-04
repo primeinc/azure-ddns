@@ -19,7 +19,7 @@ namespace Company.Function
 
         [Function("AdminPanel")]
         public async Task<HttpResponseData> AdminPanel(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = "admin")] HttpRequestData req)
+            [HttpTrigger(AuthorizationLevel.Function, "get", "post", Route = "management")] HttpRequestData req)
         {
             _logger.LogInformation("[AUDIT-ADMIN] Admin panel accessed");
 
@@ -29,10 +29,10 @@ namespace Company.Function
 
             if (string.IsNullOrEmpty(userId))
             {
-                _logger.LogWarning("[AUDIT-ADMIN] Unauthenticated admin panel access attempt");
-                var authResponse = req.CreateResponse(System.Net.HttpStatusCode.Redirect);
-                authResponse.Headers.Add("Location", $"https://{req.Url.Host}/.auth/login/aad?post_login_redirect_url=/api/admin");
-                return authResponse;
+                _logger.LogError("[AUDIT-ADMIN] EasyAuth failed - no user ID in headers");
+                var errorResponse = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
+                await errorResponse.WriteStringAsync("Authentication system error");
+                return errorResponse;
             }
 
             // Check if user is admin or bootstrap admin (tenant admin, etc.)
